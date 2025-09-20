@@ -8,12 +8,15 @@ pub mod hash;
 pub mod list;
 pub mod lock;
 pub mod lute;
+pub mod map;
 pub mod math;
 pub mod nock;
 pub mod parse;
 pub mod serial;
+pub mod set;
 pub mod sort;
 pub mod tree;
+
 
 use cold::FromNounError;
 use nockvm_macros::tas;
@@ -35,6 +38,7 @@ use crate::jets::math::*;
 use crate::jets::nock::*;
 use crate::jets::parse::*;
 use crate::jets::serial::*;
+use crate::jets::set::*;
 use crate::jets::sort::*;
 use crate::jets::tree::*;
 use crate::jets::warm::Warm;
@@ -202,6 +206,7 @@ pub fn get_jet_test_mode(_jet_name: Noun) -> bool {
 
 pub mod util {
     use std::result;
+    use either::Either::{Left, Right};
 
     use bitvec::prelude::{BitSlice, Lsb0};
 
@@ -252,8 +257,85 @@ pub mod util {
         bits_to_word(checked_left_shift(bloq, step)?)
     }
 
+    pub fn print_noun_path(noun: Noun) -> String {
+        let mut path = Vec::new();
+        let mut current = noun;
+
+        while unsafe { !current.raw_equals(&D(0)) } {
+            let cell = current.as_cell().expect("Invalid cell in path");
+            let head = cell.head();
+            let tail = cell.tail();
+            match head.as_either_atom_cell() {
+                Left(atom) => {
+                    let bytes = atom.as_ne_bytes();
+                    path.push(String::from_utf8_lossy(bytes).to_string());
+                }
+                Right(cell) => {
+                    let tas = cell.head();
+                    let ver = cell.tail();
+                    let tas_val = tas.as_atom().expect("Invalid tas atom").as_u64().expect("Invalid tas value");
+                    let ver_val = ver.as_atom().expect("Invalid ver atom").as_u64().expect("Invalid ver value");
+                    path.push(format!("{}/{}", tas_val, ver_val));
+                }
+            }
+            current = tail;
+        }
+        path.into_iter().rev().collect::<Vec<_>>().join("/")
+    }
+
+
+    pub fn print_noun(noun: &Noun, max_depth: usize, current_depth: usize) -> String {
+        if current_depth >= max_depth {
+            return "...".to_string();
+        }
+        match noun.as_either_atom_cell() {
+            Left(atom) => format!("{:?}", atom),
+            Right(cell) => {
+                format!(
+                    "[{} {}]",
+                    print_noun(&cell.head(), max_depth, current_depth + 1),
+                    print_noun(&cell.tail(), max_depth, current_depth + 1)
+                )
+            }
+        }
+    }
+
     pub fn slot(noun: Noun, axis: u64) -> Result {
         noun.slot(axis).map_err(|_e| BAIL_EXIT)
+    }
+
+    pub fn replace_at_axis(context: &mut Context, noun: Noun, axis: u64, replacement: Noun) -> Result {
+        let axis: &BitSlice<u64, Lsb0> = BitSlice::from_element(&axis);
+        let mut cursor = axis.last_one().ok_or(BAIL_EXIT)?;
+        let mut stack = Vec::new();
+        let mut current = noun;
+        while cursor != 0 {
+            cursor -= 1;
+            match current.as_either_atom_cell() {
+                Right(cell) => {
+                    stack.push(current);
+                    current = if axis[cursor] { cell.tail() } else { cell.head() };
+                }
+                Left(_atom) => {
+                    if cursor == 0 {
+                        return Ok(replacement);
+                    } else {
+                        return Err(BAIL_EXIT);
+                    }
+                }
+            }
+        }
+        let mut result = replacement;
+        while let Some(parent) = stack.pop() {
+            let cell = parent.as_cell()?;
+            result = if axis[cursor] {
+                T(&mut context.stack, &[cell.head(), result])
+            } else {
+                T(&mut context.stack, &[result, cell.tail()])
+            };
+            cursor += 1;
+        }
+        Ok(result)
     }
 
     /// Extract a bloq and check that it's computable by the current system

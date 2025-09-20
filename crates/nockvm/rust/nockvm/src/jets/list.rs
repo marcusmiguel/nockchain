@@ -130,6 +130,22 @@ pub fn jet_scag(context: &mut Context, subject: Noun) -> Result {
     util::scag(context, a, b)
 }
 
+pub fn jet_slag(context: &mut Context, subject: Noun) -> Result {
+    let sam = slot(subject, 6)?;
+    let index = slot(sam, 2)?;
+    let list = slot(sam, 3)?;
+    util::slag(context, index.as_atom()?, list)
+}
+
+pub fn jet_lien(context: &mut Context, subject: Noun) -> Result {
+    let sam = slot(subject, 6)?;
+    let a_noun = slot(sam, 2)?;
+    let b_noun = slot(sam, 3)?;
+
+    util::lien(context, a_noun, b_noun)
+}
+
+
 pub mod util {
     use std::result;
 
@@ -139,6 +155,7 @@ pub mod util {
     use crate::mem::NockStack;
     use crate::noun::{Atom, Cell, Noun, NounAllocator, D, NO, T, YES};
     use crate::site::{site_slam, Site};
+    use crate::jets::util::slam;
 
     /// Reverse order of list
     pub fn flop<T: NounAllocator>(alloc: &mut T, noun: Noun) -> Result {
@@ -360,6 +377,36 @@ pub mod util {
         }
         Ok(res_cell)
     }
+
+    pub fn lien(context: &mut Context, a_noun: Noun, b_noun: Noun) -> Result {
+        let mut list = a_noun;
+        loop {
+            if unsafe { list.raw_equals(&D(0)) } {
+                return Ok(NO);
+            }
+            let cell = list.as_cell()?;
+            let b_res = slam(context, b_noun, cell.head())?;
+            if unsafe { b_res.raw_equals(&YES) } {
+                return Ok(YES);
+            }
+            list = cell.tail();
+        }
+    }
+
+    pub fn slag(context: &mut Context, a: Atom, mut b: Noun) -> Result {
+
+        let mut a = a.as_u64()?;
+
+        loop {
+            if unsafe { a == 0 || b.raw_equals(&D(0)) } {
+                return Ok(b);
+            }
+            a -= 1;
+            b = b.as_cell()?.tail();
+        }
+
+    }
+
 }
 
 #[cfg(test)]

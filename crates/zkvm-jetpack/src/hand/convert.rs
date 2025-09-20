@@ -90,25 +90,6 @@ impl NounExt for Noun {
         }
     }
 
-    fn uncell<const N: usize>(&self) -> Result<[Self; N]> {
-        let mut inp = *self;
-        let mut cnt = 0;
-        let mut ret = [(); N].map(|_| {
-            cnt += 1;
-            if cnt == N {
-                Ok(inp)
-            } else {
-                let c = inp.as_cell()?;
-                inp = c.tail();
-                Ok(c.head())
-            }
-        });
-        if let Some(e) = ret.iter_mut().find(|v| v.is_err()) {
-            let n = core::mem::replace(e, Ok(D(0)));
-            return Err(n.unwrap_err());
-        }
-        Ok(ret.map(|v| v.unwrap()))
-    }
 }
 
 impl TryFrom<Noun> for MarySlice<'_> {

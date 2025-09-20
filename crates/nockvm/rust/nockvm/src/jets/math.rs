@@ -1,7 +1,3 @@
-use either::{Left, Right};
-use ibig::ops::DivRem;
-use ibig::UBig;
-
 /** Math jets
  *
  * We use ibig for math operations.  This is a pure rust library, and it is very convenient to use.
@@ -18,8 +14,12 @@ use ibig::UBig;
  */
 use crate::interpreter::Context;
 use crate::jets::util::*;
-use crate::jets::Result;
+// use crate::jets::Result;
+use crate::jets::{Result, JetErr};
 use crate::noun::{Atom, DirectAtom, IndirectAtom, Noun, D, DIRECT_MAX, T};
+use either::{Left, Right};
+use ibig::ops::DivRem;
+use ibig::UBig;
 
 crate::gdb!();
 
@@ -31,41 +31,9 @@ pub fn jet_add(context: &mut Context, subject: Noun) -> Result {
 }
 
 pub fn jet_dec(context: &mut Context, subject: Noun) -> Result {
-    let arg = slot(subject, 6)?;
-    if let Ok(atom) = arg.as_atom() {
-        match atom.as_either() {
-            Left(direct) => {
-                if direct.data() == 0 {
-                    Err(BAIL_EXIT)
-                } else {
-                    Ok(unsafe { DirectAtom::new_unchecked(direct.data() - 1) }.as_noun())
-                }
-            }
-            Right(indirect) => {
-                let indirect_slice = indirect.as_bitslice();
-                match indirect_slice.first_one() {
-                    None => {
-                        panic!("Decrementing 0 stored as an indirect atom");
-                    }
-                    Some(first_one) => {
-                        let (mut new_indirect, new_slice) = unsafe {
-                            IndirectAtom::new_raw_mut_bitslice(&mut context.stack, indirect.size())
-                        };
-                        if first_one > 0 {
-                            new_slice[..first_one].fill(true);
-                        }
-                        new_slice.set(first_one, false);
-                        new_slice[first_one + 1..]
-                            .copy_from_bitslice(&indirect_slice[first_one + 1..]);
-                        let res = unsafe { new_indirect.normalize_as_atom() };
-                        Ok(res.as_noun())
-                    }
-                }
-            }
-        }
-    } else {
-        Err(BAIL_EXIT)
-    }
+    let arg = slot(subject, 6)?.as_atom()?;
+
+    Ok(util::dec(context, arg)?)
 }
 
 pub fn jet_div(context: &mut Context, subject: Noun) -> Result {
@@ -250,10 +218,13 @@ pub fn jet_sub(context: &mut Context, subject: Noun) -> Result {
 }
 
 pub mod util {
-    use ibig::UBig;
-
     use crate::mem::NockStack;
     use crate::noun::{Atom, Error, Noun, Result, NO, YES};
+    use crate::noun::{IndirectAtom, DirectAtom};
+    use crate::jets::BAIL_EXIT;
+    use crate::interpreter::Context;
+    use either::{Right, Left};
+    use ibig::UBig;
 
     /// Addition
     pub fn add(stack: &mut NockStack, a: Atom, b: Atom) -> Atom {
@@ -264,6 +235,40 @@ pub mod util {
             let b_big = b.as_ubig(stack);
             let res = UBig::add_stack(stack, a_big, b_big);
             Atom::from_ubig(stack, &res)
+        }
+    }
+
+    pub fn dec(context: &mut Context, a: Atom) -> Result<Noun> {
+        match a.as_either() {
+            Left(direct) => {
+                if direct.data() == 0 {
+                    // Err(BAIL_EXIT)
+                    panic!("Decrementing 0");
+                } else {
+                    Ok(unsafe { DirectAtom::new_unchecked(direct.data() - 1) }.as_noun())
+                }
+            }
+            Right(indirect) => {
+                let indirect_slice = indirect.as_bitslice();
+                match indirect_slice.first_one() {
+                    None => {
+                        panic!("Decrementing 0 stored as an indirect atom");
+                    }
+                    Some(first_one) => {
+                        let (mut new_indirect, new_slice) = unsafe {
+                            IndirectAtom::new_raw_mut_bitslice(&mut context.stack, indirect.size())
+                        };
+                        if first_one > 0 {
+                            new_slice[..first_one].fill(true);
+                        }
+                        new_slice.set(first_one, false);
+                        new_slice[first_one + 1..]
+                            .copy_from_bitslice(&indirect_slice[first_one + 1..]);
+                        let res = unsafe { new_indirect.normalize_as_atom() };
+                        Ok(res.as_noun())
+                    }
+                }
+            }
         }
     }
 
@@ -384,12 +389,11 @@ pub mod util {
 
 #[cfg(test)]
 mod tests {
-    use ibig::ubig;
-
     use super::*;
     use crate::jets::util::test::*;
     use crate::mem::NockStack;
     use crate::noun::{Noun, D, NO, T, YES};
+    use ibig::ubig;
 
     fn atoms(s: &mut NockStack) -> (Noun, Noun, Noun, Noun, Noun) {
         (atom_0(s), atom_24(s), atom_63(s), atom_96(s), atom_128(s))

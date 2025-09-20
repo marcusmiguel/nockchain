@@ -110,18 +110,7 @@ pub fn jet_end(context: &mut Context, subject: Noun) -> Result {
     let (bloq, step) = bite(slot(arg, 2)?)?;
     let a = slot(arg, 3)?.as_atom()?;
 
-    if step == 0 {
-        Ok(D(0))
-    } else if step >= util::met(bloq, a) {
-        Ok(a.as_noun())
-    } else {
-        unsafe {
-            let (mut new_indirect, new_slice) =
-                IndirectAtom::new_raw_mut_bitslice(&mut context.stack, bite_to_word(bloq, step)?);
-            chop(bloq, 0, step, 0, new_slice, a.as_bitslice())?;
-            Ok(new_indirect.normalize_as_atom().as_noun())
-        }
-    }
+    util::end(&mut context.stack, bloq, step, a)
 }
 
 pub fn jet_lsh(context: &mut Context, subject: Noun) -> Result {
@@ -241,17 +230,7 @@ pub fn jet_rsh(context: &mut Context, subject: Noun) -> Result {
     let (bloq, step) = bite(slot(arg, 2)?)?;
     let a = slot(arg, 3)?.as_atom()?;
 
-    let len = util::met(bloq, a);
-    if step >= len {
-        return Ok(D(0));
-    }
-
-    let new_size = bits_to_word(checked_sub(a.bit_size(), checked_left_shift(bloq, step)?)?)?;
-    unsafe {
-        let (mut atom, dest) = IndirectAtom::new_raw_mut_bitslice(&mut context.stack, new_size);
-        chop(bloq, step, len - step, 0, dest, a.as_bitslice())?;
-        Ok(atom.normalize_as_atom().as_noun())
-    }
+    util::rsh(&mut context.stack, bloq, step, a)
 }
 
 pub fn jet_xeb(_context: &mut Context, subject: Noun) -> Result {
@@ -322,6 +301,34 @@ pub mod util {
                 dest.set(arg, true);
                 atom.normalize_as_atom()
             }
+        }
+    }
+
+    pub fn end(stack: &mut NockStack, bloq: usize, step: usize, a: Atom) -> Result {
+        if step == 0 {
+            Ok(D(0))
+        } else if step >= met(bloq, a) {
+            Ok(a.as_noun())
+        } else {
+            unsafe {
+                let (mut new_indirect, new_slice) =
+                    IndirectAtom::new_raw_mut_bitslice(stack, bite_to_word(bloq, step)?);
+                chop(bloq, 0, step, 0, new_slice, a.as_bitslice())?;
+                Ok(new_indirect.normalize_as_atom().as_noun())
+            }
+        }
+    }
+
+    pub fn rsh(stack: &mut NockStack, bloq: usize, step: usize, a: Atom) -> Result {
+        let len = met(bloq, a);
+        if step >= len {
+            return Ok(D(0));
+        }
+        let new_size = bits_to_word(checked_sub(a.bit_size(), checked_left_shift(bloq, step)?)?)?;
+        unsafe {
+            let (mut atom, dest) = IndirectAtom::new_raw_mut_bitslice(stack, new_size);
+            chop(bloq, step, len - step, 0, dest, a.as_bitslice())?;
+            Ok(atom.normalize_as_atom().as_noun())
         }
     }
 
