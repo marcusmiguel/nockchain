@@ -379,20 +379,6 @@ pub const URBIT_HOT_STATE: &[HotEntry] = &[
         jet_ut_fire,
     ),
     (
-        &[
-            K_138,
-            Left(b"one"),
-            Left(b"two"),
-            Left(b"tri"),
-            Left(b"qua"),
-            Left(b"pen"),
-            Left(b"ut"),
-            Left(b"redo"),
-        ],
-        1,
-        jet_ut_redo,
-    ),
-    (
         &[K_138, Left(b"one"), Left(b"two"), Left(b"cue")],
         1,
         jet_cue,

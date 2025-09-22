@@ -9513,6 +9513,7 @@
     ==    ==
   ::
   ++  fire
+    ~/  %fire
     |=  hag=(list [p=type q=foot])
     ^-  type
     ?:  ?=([[* [%wet ~ %1]] ~] hag)
