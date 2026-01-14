@@ -677,14 +677,14 @@ fn main() {
         return;
     }
 
+    let start = Instant::now();
+
     let input = cli.input.clone().unwrap_or_else(|| {
         eprintln!("Input file or directory is required unless --test");
         std::process::exit(2);
     });
 
     let inputs = collect_inputs(&input);
-
-    let start = Instant::now();
 
     for source_path in inputs {
         run_parser(&source_path, cli.jam, !cli.no_dbug, cli.out.clone());

@@ -196,6 +196,793 @@ pub fn ipv6_to_atom(s: String) -> Option<ParsedAtom> {
     Some(ParsedAtom::Small(num))
 }
 
+//
+//  Atom manipulation
+//
+
+fn bloq_bits(bloq: u32) -> u32 {
+    if bloq >= 7 {
+        panic!("bloq must be < 7 (max 64-bit chunks for u128)");
+    }
+    1 << bloq
+}
+
+pub fn met(bloq: usize, atom: &ParsedAtom) -> usize {
+    let bits_per_block: usize = 1usize << bloq;
+
+    match atom {
+        ParsedAtom::Small(n) => {
+            if *n == 0 {
+                1
+            } else {
+                let atom_bits: usize = 128 - n.leading_zeros() as usize;
+                (atom_bits + bits_per_block - 1) / bits_per_block
+            }
+        }
+        ParsedAtom::Big(b) => {
+            if b.is_zero() {
+                1
+            } else {
+                let atom_bits: usize = b.bits() as usize;
+                (atom_bits + bits_per_block - 1) / bits_per_block
+            }
+        }
+    }
+}
+
+/// rep: assemble list of ParsedAtoms into one ParsedAtom using bite spec
+///
+/// - `bloq`: block size exponent (e.g. 3 → 8-bit blocks)
+/// - `step_opt`: number of bloqs to take from each atom; if `None`, defaults to 1 (per Hoon ?^(a a [a *step]))
+/// - `list`: slice of ParsedAtoms (representing Hoon `(list @)`)
+///
+/// Semantics:
+///   result = Σ_i ( (atom_i & mask) << (i * chunk_bits) )
+///   where mask = (1 << chunk_bits) - 1
+pub fn rep(bloq: usize, step_opt: Option<usize>, list: &[ParsedAtom]) -> ParsedAtom {
+    let step = step_opt.unwrap_or(1); // default step = 1
+
+    let bloq_size = 1usize << bloq;        // 2^bloq
+    let chunk_bits = step * bloq_size;     // bits per item
+
+    if list.is_empty() || chunk_bits == 0 {
+        return ParsedAtom::Small(0);
+    }
+
+    let mut result = BigUint::from(0u32);
+
+    for (i, atom) in list.iter().enumerate() {
+        let atom_bu = atom.to_biguint();
+
+        let truncated = if chunk_bits < 128 {
+            let mask = (1u128 << chunk_bits) - 1;
+            let mask_bu = BigUint::from(mask);
+            atom_bu & mask_bu
+        } else {
+            if atom_bu.bits() as usize <= chunk_bits {
+                atom_bu
+            } else {
+                let mask = ( BigUint::from(1u32) << chunk_bits) - 1u8;
+                &atom_bu & mask
+            }
+        };
+
+        let shifted = if i == 0 {
+            truncated
+        } else {
+            truncated << (i * chunk_bits)
+        };
+
+        result += shifted;
+    }
+
+    ParsedAtom::Big(result)
+}
+
+pub fn rap(bloq: usize, chunks: &[u128]) -> ParsedAtom {
+    if chunks.is_empty() {
+        return ParsedAtom::Small(0);
+    }
+
+    let bits_per_bloq = bloq_bits(bloq as u32) as u64;
+    let mut result = BigUint::zero();
+    let mut shift = 0u64;
+
+    for &chunk in chunks {
+        let width_bloqs = met(bloq, &ParsedAtom::Small(chunk)) as u64;
+        let width_bits = width_bloqs * bits_per_bloq;
+
+        let mask = if width_bits >= 128 {
+            u128::MAX
+        } else {
+            (1u128 << width_bits) - 1
+        };
+        if chunk & !mask != 0 {
+            panic!("atom {:#x} too large for bloq {}", chunk, bloq);
+        }
+
+        let chunk_big = BigUint::from(chunk);
+        result |= chunk_big << shift;
+
+        shift += width_bits;
+
+        if shift > 128 {
+        }
+    }
+
+    if shift <= 128 {
+        let value = result.to_u128().expect("logic error: shift <=128 but not u128");
+        ParsedAtom::Small(value)
+    } else {
+        ParsedAtom::Big(result)
+    }
+}
+
+fn cut_u(v: u128, shift: usize, bits: usize) -> u8 {
+    ((v >> shift) & ((1 << bits) - 1)) as u8
+}
+
+/// Extract `run` bloqs starting at bloq `start`, where each bloq is `2^bloq` bits.
+pub fn cut(bloq: usize, start: usize, run: usize, atom: &ParsedAtom) -> ParsedAtom {
+    if run == 0 {
+        return ParsedAtom::Small(0);
+    }
+
+    let bloq_bits = match 1usize.checked_shl(bloq as u32) {
+        Some(b) => b,
+        None => return ParsedAtom::Small(0),
+    };
+
+    let bit_start = match start.checked_mul(bloq_bits) {
+        Some(s) => s,
+        None => return ParsedAtom::Small(0),
+    };
+
+    let bit_len = match run.checked_mul(bloq_bits) {
+        Some(l) => l,
+        None => return ParsedAtom::Small(0),
+    };
+
+    let src_bits = match atom {
+        ParsedAtom::Small(0) => 0,
+        ParsedAtom::Small(n) => (128 - n.leading_zeros()) as usize,
+        ParsedAtom::Big(b) => b.bits() as usize,
+    };
+
+    if bit_start >= src_bits {
+        return ParsedAtom::Small(0);
+    }
+
+    let bit_len = cmp::min(bit_len, src_bits - bit_start);
+    if bit_len == 0 {
+        return ParsedAtom::Small(0);
+    }
+
+    let shifted = match atom {
+        ParsedAtom::Small(n) => {
+            if bit_start >= 128 {
+                ParsedAtom::Small(0)
+            } else {
+                ParsedAtom::Small(n >> bit_start)
+            }
+        }
+        ParsedAtom::Big(b) => {
+            if bit_start == 0 {
+                atom.clone()
+            } else {
+                ParsedAtom::from_biguint(b >> bit_start)
+            }
+        }
+    };
+
+    match &shifted {
+        ParsedAtom::Small(n) => {
+            if bit_len >= 128 {
+                shifted
+            } else {
+                let mask = (1u128 << bit_len) - 1;
+                ParsedAtom::Small(*n & mask)
+            }
+        }
+        ParsedAtom::Big(b) => {  // b: &BigUint
+            if bit_len <= 128 {
+                // Extract low 128 bits manually (portable)
+                let low_u128 = {
+                    // Convert to u128, but preserve low bits even if truncated
+                    // u128::try_from returns Err for >u128::MAX, but we want modulo 2^128
+                    // So: take first 2 u64 limbs
+                    let mut limbs = b.iter_u64_digits();
+                    let lo = limbs.next().unwrap_or(0);
+                    let hi = limbs.next().unwrap_or(0);
+                    ((hi as u128) << 64) | (lo as u128)
+                };
+                let mask = if bit_len == 128 {
+                    u128::MAX
+                } else {
+                    (1u128 << bit_len) - 1
+                };
+                ParsedAtom::Small(low_u128 & mask)
+            } else {
+                // Big mask: (1 << bit_len) - 1
+                let mask = (BigUint::one() << bit_len) - BigUint::one();
+                // Use & with references to avoid move
+                let masked = b & &mask; // &BigUint & &BigUint → BigUint
+                ParsedAtom::from_biguint(masked)
+            }
+        }
+    }
+}
+
+pub fn lsh(bloq: usize, step: usize, atom: &ParsedAtom) -> ParsedAtom {
+    let bits = match step.checked_mul(1usize << bloq) {
+        Some(b) => b,
+        None => return ParsedAtom::Small(0),
+    };
+    atom_shl(atom, bits)
+}
+
+pub fn rsh(bloq: usize, step: usize, atom: &ParsedAtom) -> ParsedAtom {
+    let bits = match step.checked_mul(1usize << bloq) {
+        Some(b) => b,
+        None => return ParsedAtom::Small(0),
+    };
+    atom_shr(atom, bits)
+}
+
+fn lsh_u128(bloq: usize, step: usize, atom: u128) -> u128 {
+    let bits = step.checked_mul(1 << bloq).unwrap_or(128);
+    if bits >= 128 { 0 } else { atom << bits }
+}
+
+fn rsh_u128(bloq: usize, step: usize, atom: u128) -> u128 {
+    let bits = step.checked_mul(1 << bloq).unwrap_or(128);
+    if bits >= 128 { 0 } else { atom >> bits }
+}
+
+fn lsh_big(bloq: usize, step: usize, atom: &BigUint) -> BigUint {
+    let bits = step.checked_mul(1 << bloq).unwrap_or(usize::MAX);
+    if bits == 0 { atom.clone() } else { atom << bits }
+}
+
+fn rsh_big(bloq: usize, step: usize, atom: &BigUint) -> BigUint {
+    let bits = step.checked_mul(1 << bloq).unwrap_or(usize::MAX);
+    if bits == 0 { atom.clone() } else { atom >> bits }
+}
+
+fn end(bloq: usize, step: usize, atom: &ParsedAtom) -> ParsedAtom {
+    let total_bits = match step.checked_mul(1usize << bloq) {
+        Some(b) => b,
+        None => return ParsedAtom::Small(0),
+    };
+    atom_mask_low_bits(atom, total_bits)
+}
+
+fn end_big(bloq: usize, step: usize, atom: &BigUint) -> BigUint {
+    let total_bits = match step.checked_mul(1usize << bloq) {
+        Some(b) => b as u128,
+        None => return BigUint::zero(),
+    };
+    if total_bits == 0 {
+        return BigUint::zero();
+    }
+    let mask = (BigUint::one() << total_bits) - BigUint::one();
+    atom & &mask
+}
+
+fn end_u128(bloq: usize, step: usize, atom: u128) -> u128 {
+    let total_bits = match step.checked_mul(1usize << bloq) {
+        Some(b) => b as u128,
+        None => return 0,
+    };
+    if total_bits >= 128 {
+        atom
+    } else {
+        let mask = (1u128 << total_bits) - 1;
+        atom & mask
+    }
+}
+
+fn atom_shl(a: &ParsedAtom, bits: usize) -> ParsedAtom {
+    if bits == 0 { return a.clone(); }
+    match a {
+        ParsedAtom::Small(n) => {
+            if bits >= 128 { ParsedAtom::from_biguint(BigUint::from(*n) << bits) }
+            else { ParsedAtom::Small(n << bits) }
+        }
+        ParsedAtom::Big(b) => ParsedAtom::from_biguint(b << bits),
+    }
+}
+
+fn atom_shr(atom: &ParsedAtom, bits: usize) -> ParsedAtom {
+    if bits == 0 {
+        return atom.clone();
+    }
+    match atom {
+        ParsedAtom::Small(n) => {
+            if bits >= 128 {
+                ParsedAtom::Small(0)
+            } else {
+                ParsedAtom::Small(n >> bits)
+            }
+        }
+        ParsedAtom::Big(b) => {
+            ParsedAtom::from_biguint(b >> bits)
+        }
+    }
+}
+
+fn atom_mask_low_bits(atom: &ParsedAtom, bits: usize) -> ParsedAtom {
+    if bits == 0 {
+        return ParsedAtom::Small(0);
+    }
+    match atom {
+        ParsedAtom::Small(n) => {
+            if bits >= 128 {
+                ParsedAtom::Small(*n)
+            } else {
+                let mask = (1u128 << bits) - 1;
+                ParsedAtom::Small(*n & mask)
+            }
+        }
+        ParsedAtom::Big(b) => {
+            if bits <= 128 {
+                let mask: u128 = (1u128 << bits) - 1;
+                let mut limbs = b.iter_u64_digits();
+                let lo = limbs.next().unwrap_or(0);
+                let hi = limbs.skip(1).next().unwrap_or(0);
+                let low_u128 = ((hi as u128) << 64) | (lo as u128);
+                ParsedAtom::Small(low_u128 & mask)
+            } else {
+                let mask = (BigUint::one() << bits) - BigUint::one();
+                ParsedAtom::from_biguint(b & &mask)
+            }
+        }
+    }
+}
+
+fn dis_big(x: &BigUint, mask: &BigUint) -> BigUint {
+    x & mask
+}
+
+fn dis<T: Copy + BitAnd<Output = T>>(x: T, mask: T) -> T {
+    x & mask
+}
+
+fn con(hi: u64, lo: u64) -> u64 {
+    hi | lo
+}
+
+fn con_atoms(hi: ParsedAtom, lo: ParsedAtom) -> ParsedAtom {
+    match (hi, lo) {
+        (ParsedAtom::Small(a), ParsedAtom::Small(b)) => ParsedAtom::Small(a | b),
+        (a, b) => {
+            let x = a.to_biguint();
+            let y = b.to_biguint();
+            ParsedAtom::from_biguint(x | y)
+        }
+    }
+}
+
+fn mix(x: u64, y: u64) -> u64 {
+    x ^ y
+}
+
+fn mix_big(x: &BigUint, y: &BigUint) -> BigUint {
+    x ^ y
+}
+
+
+pub fn fil(a: u32, b: u32, c: u128) -> ParsedAtom {
+    if b == 0 {
+        return ParsedAtom::Small(0);
+    }
+
+    let bloq_bits = 1u32 << a; // 2^a bits per block
+    let mask = if bloq_bits >= 128 {
+        u128::MAX
+    } else {
+        (1u128 << bloq_bits) - 1
+    };
+    let c_masked = c & mask;
+
+    if bloq_bits as u64 * b as u64 <= 128 && c_masked != 0 {
+        let mut result = 0u128;
+        for i in 0..b {
+            let shift = (b - 1 - i) as u32 * bloq_bits;
+            if shift >= 128 { break; }
+            result |= c_masked << shift;
+        }
+        ParsedAtom::Small(result)
+    } else {
+        let c_big = BigUint::from(c_masked);
+        let mut result = BigUint::from(0u8);
+        for i in 0..b {
+            let shift = (b - 1 - i) as usize * bloq_bits as usize;
+            result |= &c_big << shift;
+        }
+        ParsedAtom::Big(result)
+    }
+}
+
+pub fn atom_less_than(a: Atom, b: Atom) -> Noun {
+    if atom_less_than_b(&a, &b) {
+        YES
+    } else {
+        NO
+    }
+}
+
+fn atom_less_than_b(a: &Atom, b: &Atom) -> bool {
+    if let (Some(a_direct), Some(b_direct)) = (a.direct(), b.direct()) {
+        return unsafe { a_direct.data() < b_direct.data() };
+    }
+
+    let a_bits = a.bit_size();
+    let b_bits = b.bit_size();
+
+    if a_bits != b_bits {
+        return a_bits < b_bits;
+    }
+
+    if a_bits <= 64 && b_bits <= 64 {
+        if let (Ok(a_u64), Ok(b_u64)) = (a.as_u64(), b.as_u64()) {
+            return a_u64 < b_u64;
+        }
+    }
+
+    let a_limbs = if a.is_direct() {
+        &[unsafe { a.direct().unwrap().data() }]
+    } else {
+        unsafe { std::slice::from_raw_parts(a.data_pointer(), a.size()) }
+    };
+
+    let b_limbs = if b.is_direct() {
+        &[unsafe { b.direct().unwrap().data() }]
+    } else {
+        unsafe { std::slice::from_raw_parts(b.data_pointer(), b.size()) }
+    };
+
+    let max_limbs = a_limbs.len().max(b_limbs.len());
+    for i in 0..max_limbs {
+        let a_idx = a_limbs.len().wrapping_sub(1).wrapping_sub(i);
+        let b_idx = b_limbs.len().wrapping_sub(1).wrapping_sub(i);
+
+        let a_limb = if a_idx < a_limbs.len() { a_limbs[a_idx] } else { 0 };
+        let b_limb = if b_idx < b_limbs.len() { b_limbs[b_idx] } else { 0 };
+
+        if a_limb != b_limb {
+            return a_limb < b_limb;
+        }
+    }
+
+    false
+}
+
+fn dvr_big(a: &BigUint, b: &BigUint) -> (BigUint, BigUint) {
+    let quot = a / b;
+    let rem  = a % b;
+    (quot, rem)
+}
+
+pub fn bex(a: u128) -> u128 {
+    if a == 0 {
+        1
+    } else {
+        assert!(a < 128, "bex: exponent too large for u128");
+        1u128 << a
+    }
+}
+
+//
+//  Cue / Jam
+//
+
+pub fn cue_simple(buffer: ParsedAtom) -> Result<NounExpr, Box<dyn std::error::Error>> {
+    let bits = atom_to_bits(&buffer);
+    let mut backrefs = HashMap::new();
+    let (noun, _) = cue_inner(&bits, 0, &mut backrefs)?;
+    Ok(noun)
+}
+
+pub fn jam_simple(noun: NounExpr) -> ParsedAtom {
+    let mut bits = Vec::new();
+    let mut backrefs = HashMap::new();
+    let mut stack = vec![noun];
+
+    while let Some(current) = stack.pop() {
+        if let Some(&offset) = backrefs.get(&current) {
+            let use_backref = match &current {
+                NounExpr::ParsedAtom(atom) => {
+                    let atom_bits = mat_bits(atom).len();
+                    let offset_bits = mat_bits(&offset_to_atom(offset)).len();
+                    offset_bits < atom_bits
+                }
+                NounExpr::Cell(_, _) => true,
+            };
+
+            if use_backref {
+                bits.push(true);
+                bits.push(true);
+                bits.extend(mat_bits(&offset_to_atom(offset)));
+                continue;
+            }
+        }
+
+        let offset = bits.len();
+        backrefs.insert(current.clone(), offset);
+
+        match current {
+            NounExpr::ParsedAtom(atom) => {
+                bits.push(false);
+                bits.extend(mat_bits(&atom));
+            }
+            NounExpr::Cell(head, tail) => {
+                bits.push(true);
+                bits.push(false);
+                stack.push(*tail);
+                stack.push(*head);
+            }
+        }
+    }
+
+    bits_to_atom(&bits)
+}
+
+fn offset_to_atom(offset: usize) -> ParsedAtom {
+    if offset <= u128::MAX as usize {
+        ParsedAtom::Small(offset as u128)
+    } else {
+        ParsedAtom::Big(BigUint::from(offset))
+    }
+}
+
+fn mat_bits(atom: &ParsedAtom) -> Vec<bool> {
+    let n = atom_bit_len(atom); // = met0(atom): number of bits needed to represent the atom
+
+    let mut bits = Vec::new();
+
+    if n == 0 {
+        bits.push(true);
+        return bits;
+    }
+
+    let k = usize_bit_len(n); // met0(n)
+
+    bits.extend(std::iter::repeat(false).take(k));
+
+    bits.push(true);
+
+    if k > 1 {
+        let offset = n - (1usize << (k - 1)); // same as n & ((1 << (k-1)) - 1)
+        for i in 0..(k - 1) {
+            bits.push((offset >> i) & 1 == 1);
+        }
+    }
+
+    for i in 0..n {
+        bits.push(atom_get_bit(atom, i as u64));
+    }
+
+    bits
+}
+
+fn usize_bit_len(x: usize) -> usize {
+    if x == 0 { 1 } else { (usize::BITS - x.leading_zeros()) as usize }
+}
+
+fn atom_bit_len(atom: &ParsedAtom) -> usize {
+    match atom {
+        ParsedAtom::Small(0) => 0,
+        ParsedAtom::Small(x) => (128 - x.leading_zeros() as usize),
+        ParsedAtom::Big(x) => x.bits() as usize,
+    }
+}
+
+fn atom_get_bit(atom: &ParsedAtom, i: u64) -> bool {
+    match atom {
+        ParsedAtom::Small(x) => i < 128 && ((x >> i) & 1 == 1),
+        ParsedAtom::Big(x) => {
+            let byte_index = (i / 8) as usize;
+            let bit_index = (i % 8) as u8;
+            let bytes = x.to_bytes_le();
+            if byte_index < bytes.len() {
+                let byte = bytes[byte_index];
+                (byte >> bit_index) & 1 == 1
+            } else {
+                false
+            }
+        }
+    }
+}
+
+fn bits_to_atom(bits: &[bool]) -> ParsedAtom {
+    if bits.is_empty() {
+        return ParsedAtom::Small(0);
+    }
+
+    let len = bits.len();
+
+    if len <= 128 {
+        let mut val: u128 = 0;
+        for (i, &bit) in bits.iter().enumerate() {
+            if bit {
+                val |= 1u128 << i;
+            }
+        }
+        ParsedAtom::Small(val)
+    } else {
+        let mut big = BigUint::from(0u32);
+        for (i, &bit) in bits.iter().enumerate() {
+            if bit {
+                big += BigUint::from(1u32) << i;
+            }
+        }
+        ParsedAtom::Big(big)
+    }
+}
+
+fn rub_backref(bits: &[bool], cursor: &mut usize) -> Result<u64, Box<dyn std::error::Error>> {
+    let size = get_size(bits, cursor)?;
+    if size == 0 {
+        return Ok(0);
+    }
+    if size > 64 {
+        return Err("backref offset too large (>64 bits)".into());
+    }
+    if *cursor + size as usize > bits.len() {
+        return Err("not enough bits for backref".into());
+    }
+
+    let mut val: u64 = 0;
+    for i in 0..size {
+        if bits[*cursor + i as usize] {
+            val |= 1u64 << i;
+        }
+    }
+    *cursor += size as usize;
+    Ok(val)
+}
+
+fn rub_atom(bits: &[bool], cursor: &mut usize) -> Result<ParsedAtom, Box<dyn std::error::Error>> {
+    let size = get_size(bits, cursor)?;
+
+    if size == 0 {
+        return Ok(ParsedAtom::Small(0));
+    }
+
+    if *cursor + size as usize > bits.len() {
+        return Err("not enough bits for rub atom payload".into());
+    }
+
+    // Read `size` bits, LSB-first → value = sum bit_i * 2^i
+    if size <= 128 {
+        let mut val: u128 = 0;
+        for i in 0..size {
+            if bits[*cursor + i as usize] {
+                val |= 1u128 << i;
+            }
+        }
+        *cursor += size as usize;
+        Ok(ParsedAtom::Small(val))
+    } else {
+        // Use BigUint
+        let mut big = BigUint::from(0u32);
+        for i in 0..size {
+            if bits[*cursor + i as usize] {
+                big += BigUint::from(1u32) << i;
+            }
+        }
+        *cursor += size as usize;
+        Ok(ParsedAtom::Big(big))
+    }
+}
+
+fn get_size(bits: &[bool], cursor: &mut usize) -> Result<u64, &'static str> {
+    let start = *cursor;
+    // Count leading zeros
+    while *cursor < bits.len() && !bits[*cursor] {
+        *cursor += 1;
+    }
+
+    if *cursor >= bits.len() {
+        return Err("unexpected EOF in rub size prefix");
+    }
+
+    let c = (*cursor - start) as u32; // number of leading zeros
+    *cursor += 1; // consume the '1'
+
+    if c == 0 {
+        Ok(0)
+    } else {
+        // Read c-1 bits
+        if *cursor + (c - 1) as usize > bits.len() {
+            return Err("not enough bits for rub size field");
+        }
+
+        let mut x = 0u64;
+        for i in 0..(c - 1) {
+            if bits[*cursor + i as usize] {
+                x |= 1u64 << i; // LSB-first: first bit = 2^0
+            }
+        }
+        *cursor += (c - 1) as usize;
+
+        let size = (1u64 << (c - 1)) + x;
+        Ok(size)
+    }
+}
+
+fn atom_to_bits(atom: &ParsedAtom) -> Vec<bool> {
+    match atom {
+        ParsedAtom::Small(x) => {
+            let mut bits = Vec::with_capacity(128);
+            for i in 0..128 {
+                bits.push((x >> i) & 1 == 1);
+            }
+            bits
+        }
+        ParsedAtom::Big(x) => {
+            // Convert to little-endian bytes, then bits
+            let bytes = x.to_bytes_le();
+            let mut bits = Vec::new();
+            for &byte in &bytes {
+                for i in 0..8 {
+                    bits.push((byte >> i) & 1 == 1);
+                }
+            }
+            // Pad to next multiple of 8? Not necessary.
+            bits
+        }
+    }
+}
+
+fn cue_inner( // rename
+    bits: &[bool],
+    cursor: usize,
+    backrefs: &mut HashMap<u64, NounExpr>,
+) -> Result<(NounExpr, usize), Box<dyn std::error::Error>> {
+    if cursor >= bits.len() {
+        return Err("unexpected EOF".into());
+    }
+
+    let tag0 = bits[cursor];
+    if !tag0 {
+        let mut cur = cursor + 1;
+        let atom = rub_atom(bits, &mut cur)?;
+        let noun = NounExpr::ParsedAtom(atom);
+        backrefs.insert(cursor as u64, noun.clone());
+        Ok((noun, cur))
+    } else {
+        if cursor + 1 >= bits.len() {
+            return Err("unexpected EOF after tag 1".into());
+        }
+        let tag1 = bits[cursor + 1];
+        if !tag1 {
+            let mut cur = cursor + 2;
+            let (head, next) = cue_inner(bits, cur, backrefs)?;
+            cur = next;
+            let (tail, next2) = cue_inner(bits, cur, backrefs)?;
+            cur = next2;
+            let noun = NounExpr::Cell(Box::new(head), Box::new(tail));
+            backrefs.insert(cursor as u64, noun.clone());
+            Ok((noun, cur))
+        } else {
+            let mut cur = cursor + 2;
+            let offset = rub_backref(bits, &mut cur)?;
+
+            let noun = backrefs
+                .get(&(offset))
+                .cloned()
+                .ok_or_else(|| format!("backref to {} not found", offset))?;
+            Ok((noun, cur))
+        }
+    }
+}
+
+//
+//  Hoon Compiler Auxiliary
+//
+
 pub fn basal(bas: BaseType) -> Hoon {
     match bas {
         BaseType::Atom(a) => {
@@ -3224,21 +4011,6 @@ pub fn binaryfloat_div_internal(
     rau(j, quot, rem.is_zero(), p, v_min, w, r, d)
 }
 
-fn dvr_big(a: &BigUint, b: &BigUint) -> (BigUint, BigUint) {
-    let quot = a / b;
-    let rem  = a % b;
-    (quot, rem)
-}
-
-pub fn bex(a: u128) -> u128 {
-    if a == 0 {
-        1
-    } else {
-        assert!(a < 128, "bex: exponent too large for u128");
-        1u128 << a
-    }
-}
-
 fn xpd(e: u128, a: BigUint, d: char, p: u128, v: u128) -> (u128, BigUint) {
     let ma = met_big(0, &a.clone()) as u128;
 
@@ -3371,38 +4143,6 @@ pub fn pow(base: u128, exp: u128) -> BigUint {
     }
 
     result
-}
-
-pub fn fil(a: u32, b: u32, c: u128) -> ParsedAtom {
-    if b == 0 {
-        return ParsedAtom::Small(0);
-    }
-
-    let bloq_bits = 1u32 << a; // 2^a bits per block
-    let mask = if bloq_bits >= 128 {
-        u128::MAX
-    } else {
-        (1u128 << bloq_bits) - 1
-    };
-    let c_masked = c & mask;
-
-    if bloq_bits as u64 * b as u64 <= 128 && c_masked != 0 {
-        let mut result = 0u128;
-        for i in 0..b {
-            let shift = (b - 1 - i) as u32 * bloq_bits;
-            if shift >= 128 { break; }
-            result |= c_masked << shift;
-        }
-        ParsedAtom::Small(result)
-    } else {
-        let c_big = BigUint::from(c_masked);
-        let mut result = BigUint::from(0u8);
-        for i in 0..b {
-            let shift = (b - 1 - i) as usize * bloq_bits as usize;
-            result |= &c_big << shift;
-        }
-        ParsedAtom::Big(result)
-    }
 }
 
 pub fn bif(a: BinaryFloat, w: u128, p: u128, b: u128, r: char) -> ParsedAtom {
@@ -4785,64 +5525,6 @@ pub fn urx<'src>(
     .map(|chars: Vec<u128>| rap(3, &chars))
 }
 
-fn atom_shl(a: &ParsedAtom, bits: usize) -> ParsedAtom {
-    if bits == 0 { return a.clone(); }
-    match a {
-        ParsedAtom::Small(n) => {
-            if bits >= 128 { ParsedAtom::from_biguint(BigUint::from(*n) << bits) }
-            else { ParsedAtom::Small(n << bits) }
-        }
-        ParsedAtom::Big(b) => ParsedAtom::from_biguint(b << bits),
-    }
-}
-
-fn atom_shr(atom: &ParsedAtom, bits: usize) -> ParsedAtom {
-    if bits == 0 {
-        return atom.clone();
-    }
-    match atom {
-        ParsedAtom::Small(n) => {
-            if bits >= 128 {
-                ParsedAtom::Small(0)
-            } else {
-                ParsedAtom::Small(n >> bits)
-            }
-        }
-        ParsedAtom::Big(b) => {
-            ParsedAtom::from_biguint(b >> bits)
-        }
-    }
-}
-
-fn atom_mask_low_bits(atom: &ParsedAtom, bits: usize) -> ParsedAtom {
-    if bits == 0 {
-        return ParsedAtom::Small(0);
-    }
-    match atom {
-        ParsedAtom::Small(n) => {
-            if bits >= 128 {
-                ParsedAtom::Small(*n)
-            } else {
-                let mask = (1u128 << bits) - 1;
-                ParsedAtom::Small(*n & mask)
-            }
-        }
-        ParsedAtom::Big(b) => {
-            if bits <= 128 {
-                let mask: u128 = (1u128 << bits) - 1;
-                let mut limbs = b.iter_u64_digits();
-                let lo = limbs.next().unwrap_or(0);
-                let hi = limbs.skip(1).next().unwrap_or(0);
-                let low_u128 = ((hi as u128) << 64) | (lo as u128);
-                ParsedAtom::Small(low_u128 & mask)
-            } else {
-                let mask = (BigUint::one() << bits) - BigUint::one();
-                ParsedAtom::from_biguint(b & &mask)
-            }
-        }
-    }
-}
-
 // tuft: ParsedAtom (codepoint) -> ParsedAtom (UTF-8 bytes, @t)
 pub fn tuft(atom: &ParsedAtom) -> ParsedAtom {
     // This builds a little-endian byte list, then rap 3 packs it
@@ -5278,6 +5960,10 @@ pub fn decimal_number<'src>(
         })
         .labelled("Decimal Number")
 }
+
+//
+// List Functions
+//
 
 fn snag<T>(index: usize, list: &[T]) -> &T {
     list.get(index).expect("snag: index out of bounds")
@@ -6904,289 +7590,6 @@ pub fn yule(d: u64, h: u64, m: u64, s: u64, f: &[u16]) -> u128 {
     ((sec as u128) << 64) | (fac as u128)
 }
 
-fn bloq_bits(bloq: u32) -> u32 {
-    if bloq >= 7 {
-        panic!("bloq must be < 7 (max 64-bit chunks for u128)");
-    }
-    1 << bloq
-}
-
-pub fn met(bloq: usize, atom: &ParsedAtom) -> usize {
-    let bits_per_block: usize = 1usize << bloq;
-
-    match atom {
-        ParsedAtom::Small(n) => {
-            if *n == 0 {
-                1
-            } else {
-                let atom_bits: usize = 128 - n.leading_zeros() as usize;
-                (atom_bits + bits_per_block - 1) / bits_per_block
-            }
-        }
-        ParsedAtom::Big(b) => {
-            if b.is_zero() {
-                1
-            } else {
-                let atom_bits: usize = b.bits() as usize;
-                (atom_bits + bits_per_block - 1) / bits_per_block
-            }
-        }
-    }
-}
-
-/// rep: assemble list of ParsedAtoms into one ParsedAtom using bite spec
-///
-/// - `bloq`: block size exponent (e.g. 3 → 8-bit blocks)
-/// - `step_opt`: number of bloqs to take from each atom; if `None`, defaults to 1 (per Hoon ?^(a a [a *step]))
-/// - `list`: slice of ParsedAtoms (representing Hoon `(list @)`)
-///
-/// Semantics:
-///   result = Σ_i ( (atom_i & mask) << (i * chunk_bits) )
-///   where mask = (1 << chunk_bits) - 1
-pub fn rep(bloq: usize, step_opt: Option<usize>, list: &[ParsedAtom]) -> ParsedAtom {
-    let step = step_opt.unwrap_or(1); // default step = 1
-
-    let bloq_size = 1usize << bloq;        // 2^bloq
-    let chunk_bits = step * bloq_size;     // bits per item
-
-    if list.is_empty() || chunk_bits == 0 {
-        return ParsedAtom::Small(0);
-    }
-
-    let mut result = BigUint::from(0u32);
-
-    for (i, atom) in list.iter().enumerate() {
-        let atom_bu = atom.to_biguint();
-
-        let truncated = if chunk_bits < 128 {
-            let mask = (1u128 << chunk_bits) - 1;
-            let mask_bu = BigUint::from(mask);
-            atom_bu & mask_bu
-        } else {
-            if atom_bu.bits() as usize <= chunk_bits {
-                atom_bu
-            } else {
-                let mask = ( BigUint::from(1u32) << chunk_bits) - 1u8;
-                &atom_bu & mask
-            }
-        };
-
-        let shifted = if i == 0 {
-            truncated
-        } else {
-            truncated << (i * chunk_bits)
-        };
-
-        result += shifted;
-    }
-
-    ParsedAtom::Big(result)
-}
-
-pub fn rap(bloq: usize, chunks: &[u128]) -> ParsedAtom {
-    if chunks.is_empty() {
-        return ParsedAtom::Small(0);
-    }
-
-    let bits_per_bloq = bloq_bits(bloq as u32) as u64;
-    let mut result = BigUint::zero();
-    let mut shift = 0u64;
-
-    for &chunk in chunks {
-        let width_bloqs = met(bloq, &ParsedAtom::Small(chunk)) as u64;
-        let width_bits = width_bloqs * bits_per_bloq;
-
-        let mask = if width_bits >= 128 {
-            u128::MAX
-        } else {
-            (1u128 << width_bits) - 1
-        };
-        if chunk & !mask != 0 {
-            panic!("atom {:#x} too large for bloq {}", chunk, bloq);
-        }
-
-        let chunk_big = BigUint::from(chunk);
-        result |= chunk_big << shift;
-
-        shift += width_bits;
-
-        if shift > 128 {
-        }
-    }
-
-    // Now decide which variant to return
-    if shift <= 128 {
-        let value = result.to_u128().expect("logic error: shift <=128 but not u128");
-        ParsedAtom::Small(value)
-    } else {
-        ParsedAtom::Big(result)
-    }
-}
-
-fn cut_u(v: u128, shift: usize, bits: usize) -> u8 {
-    ((v >> shift) & ((1 << bits) - 1)) as u8
-}
-
-/// Extract `run` bloqs starting at bloq `start`, where each bloq is `2^bloq` bits.
-pub fn cut(bloq: usize, start: usize, run: usize, atom: &ParsedAtom) -> ParsedAtom {
-    if run == 0 {
-        return ParsedAtom::Small(0);
-    }
-
-    let bloq_bits = match 1usize.checked_shl(bloq as u32) {
-        Some(b) => b,
-        None => return ParsedAtom::Small(0),
-    };
-
-    let bit_start = match start.checked_mul(bloq_bits) {
-        Some(s) => s,
-        None => return ParsedAtom::Small(0),
-    };
-
-    let bit_len = match run.checked_mul(bloq_bits) {
-        Some(l) => l,
-        None => return ParsedAtom::Small(0),
-    };
-
-    let src_bits = match atom {
-        ParsedAtom::Small(0) => 0,
-        ParsedAtom::Small(n) => (128 - n.leading_zeros()) as usize,
-        ParsedAtom::Big(b) => b.bits() as usize,
-    };
-
-    if bit_start >= src_bits {
-        return ParsedAtom::Small(0);
-    }
-
-    let bit_len = cmp::min(bit_len, src_bits - bit_start);
-    if bit_len == 0 {
-        return ParsedAtom::Small(0);
-    }
-
-    let shifted = match atom {
-        ParsedAtom::Small(n) => {
-            if bit_start >= 128 {
-                ParsedAtom::Small(0)
-            } else {
-                ParsedAtom::Small(n >> bit_start)
-            }
-        }
-        ParsedAtom::Big(b) => {
-            if bit_start == 0 {
-                atom.clone()
-            } else {
-                ParsedAtom::from_biguint(b >> bit_start)
-            }
-        }
-    };
-
-    match &shifted {
-        ParsedAtom::Small(n) => {
-            if bit_len >= 128 {
-                shifted
-            } else {
-                let mask = (1u128 << bit_len) - 1;
-                ParsedAtom::Small(*n & mask)
-            }
-        }
-        ParsedAtom::Big(b) => {  // b: &BigUint
-            if bit_len <= 128 {
-                // Extract low 128 bits manually (portable)
-                let low_u128 = {
-                    // Convert to u128, but preserve low bits even if truncated
-                    // u128::try_from returns Err for >u128::MAX, but we want modulo 2^128
-                    // So: take first 2 u64 limbs
-                    let mut limbs = b.iter_u64_digits();
-                    let lo = limbs.next().unwrap_or(0);
-                    let hi = limbs.next().unwrap_or(0);
-                    ((hi as u128) << 64) | (lo as u128)
-                };
-                let mask = if bit_len == 128 {
-                    u128::MAX
-                } else {
-                    (1u128 << bit_len) - 1
-                };
-                ParsedAtom::Small(low_u128 & mask)
-            } else {
-                // Big mask: (1 << bit_len) - 1
-                let mask = (BigUint::one() << bit_len) - BigUint::one();
-                // Use & with references to avoid move
-                let masked = b & &mask; // &BigUint & &BigUint → BigUint
-                ParsedAtom::from_biguint(masked)
-            }
-        }
-    }
-}
-
-pub fn lsh(bloq: usize, step: usize, atom: &ParsedAtom) -> ParsedAtom {
-    let bits = match step.checked_mul(1usize << bloq) {
-        Some(b) => b,
-        None => return ParsedAtom::Small(0),
-    };
-    atom_shl(atom, bits)
-}
-
-pub fn rsh(bloq: usize, step: usize, atom: &ParsedAtom) -> ParsedAtom {
-    let bits = match step.checked_mul(1usize << bloq) {
-        Some(b) => b,
-        None => return ParsedAtom::Small(0),
-    };
-    atom_shr(atom, bits)
-}
-
-fn lsh_u128(bloq: usize, step: usize, atom: u128) -> u128 {
-    let bits = step.checked_mul(1 << bloq).unwrap_or(128);
-    if bits >= 128 { 0 } else { atom << bits }
-}
-
-fn rsh_u128(bloq: usize, step: usize, atom: u128) -> u128 {
-    let bits = step.checked_mul(1 << bloq).unwrap_or(128);
-    if bits >= 128 { 0 } else { atom >> bits }
-}
-
-fn lsh_big(bloq: usize, step: usize, atom: &BigUint) -> BigUint {
-    let bits = step.checked_mul(1 << bloq).unwrap_or(usize::MAX);
-    if bits == 0 { atom.clone() } else { atom << bits }
-}
-
-fn rsh_big(bloq: usize, step: usize, atom: &BigUint) -> BigUint {
-    let bits = step.checked_mul(1 << bloq).unwrap_or(usize::MAX);
-    if bits == 0 { atom.clone() } else { atom >> bits }
-}
-
-fn end(bloq: usize, step: usize, atom: &ParsedAtom) -> ParsedAtom {
-    let total_bits = match step.checked_mul(1usize << bloq) {
-        Some(b) => b,
-        None => return ParsedAtom::Small(0),
-    };
-    atom_mask_low_bits(atom, total_bits)
-}
-
-fn end_big(bloq: usize, step: usize, atom: &BigUint) -> BigUint {
-    let total_bits = match step.checked_mul(1usize << bloq) {
-        Some(b) => b as u128,
-        None => return BigUint::zero(),
-    };
-    if total_bits == 0 {
-        return BigUint::zero();
-    }
-    let mask = (BigUint::one() << total_bits) - BigUint::one();
-    atom & &mask
-}
-
-fn end_u128(bloq: usize, step: usize, atom: u128) -> u128 {
-    let total_bits = match step.checked_mul(1usize << bloq) {
-        Some(b) => b as u128,
-        None => return 0,
-    };
-    if total_bits >= 128 {
-        atom
-    } else {
-        let mask = (1u128 << total_bits) - 1;
-        atom & mask
-    }
-}
-
 pub const SIS: [[u8; 3]; 256] = [
     *b"doz", *b"mar", *b"bin", *b"wan", *b"sam", *b"lit", *b"sig", *b"hid",
     *b"fid", *b"lis", *b"sog", *b"dir", *b"wac", *b"sab", *b"wis", *b"sib",
@@ -7460,38 +7863,6 @@ pub fn phonemic_name_unscrambled<'src>(
     })
 }
 
-fn dis_big(x: &BigUint, mask: &BigUint) -> BigUint {
-    x & mask
-}
-
-// fn dis(x: u64, mask: u64) -> u64 {
-fn dis<T: Copy + BitAnd<Output = T>>(x: T, mask: T) -> T {
-    x & mask
-}
-
-fn con(hi: u64, lo: u64) -> u64 {
-    hi | lo
-}
-
-fn con_atoms(hi: ParsedAtom, lo: ParsedAtom) -> ParsedAtom {
-    match (hi, lo) {
-        (ParsedAtom::Small(a), ParsedAtom::Small(b)) => ParsedAtom::Small(a | b),
-        (a, b) => {
-            let x = a.to_biguint();
-            let y = b.to_biguint();
-            ParsedAtom::from_biguint(x | y)
-        }
-    }
-}
-
-fn mix(x: u64, y: u64) -> u64 {
-    x ^ y
-}
-
-fn mix_big(x: &BigUint, y: &BigUint) -> BigUint {
-    x ^ y
-}
-
 fn mix_atoms(a: ParsedAtom, b: ParsedAtom) -> ParsedAtom {
     match (a, b) {
         (ParsedAtom::Small(x), ParsedAtom::Small(y)) => ParsedAtom::Small(x ^ y),
@@ -7715,7 +8086,7 @@ where
 }
 
 pub fn feis(m: ParsedAtom) -> ParsedAtom {
-    debug_assert!(m.lt(&ParsedAtom::Small(0xffff_0000))); // domain guarantee
+    debug_assert!(m.lt(&ParsedAtom::Small(0xffff_0000)));
     let m_u64 = m.to_u64_lossy();
     let a = 0xffffu64;
     let b = 0x1_0000u64;
@@ -7863,322 +8234,6 @@ pub fn twid<'src>(
                 }),
         crub(),
     ))
-}
-
-pub fn cue_simple(buffer: ParsedAtom) -> Result<NounExpr, Box<dyn std::error::Error>> {
-    let bits = atom_to_bits(&buffer);
-    let mut backrefs = HashMap::new();
-    let (noun, _) = cue_inner(&bits, 0, &mut backrefs)?;
-    Ok(noun)
-}
-
-fn noun_hash(noun: &NounExpr) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    noun.hash(&mut hasher);
-    hasher.finish()
-}
-
-pub fn jam_simple(noun: NounExpr) -> ParsedAtom {
-    let mut bits = Vec::new();
-    let mut backrefs = HashMap::new();
-    let mut stack = vec![noun];
-
-    while let Some(current) = stack.pop() {
-        if let Some(&offset) = backrefs.get(&current) {
-            let use_backref = match &current {
-                NounExpr::ParsedAtom(atom) => {
-                    let atom_bits = mat_bits(atom).len();
-                    let offset_bits = mat_bits(&offset_to_atom(offset)).len();
-                    offset_bits < atom_bits
-                }
-                NounExpr::Cell(_, _) => true,
-            };
-
-            if use_backref {
-                bits.push(true);
-                bits.push(true);
-                bits.extend(mat_bits(&offset_to_atom(offset)));
-                continue;
-            }
-        }
-
-        let offset = bits.len();
-        backrefs.insert(current.clone(), offset);
-
-        match current {
-            NounExpr::ParsedAtom(atom) => {
-                bits.push(false);
-                bits.extend(mat_bits(&atom));
-            }
-            NounExpr::Cell(head, tail) => {
-                bits.push(true);
-                bits.push(false);
-                stack.push(*tail);
-                stack.push(*head);
-            }
-        }
-    }
-
-    bits_to_atom(&bits)
-}
-
-fn offset_to_atom(offset: usize) -> ParsedAtom {
-    if offset <= u128::MAX as usize {
-        ParsedAtom::Small(offset as u128)
-    } else {
-        ParsedAtom::Big(BigUint::from(offset))
-    }
-}
-
-fn mat_bits(atom: &ParsedAtom) -> Vec<bool> {
-    let n = atom_bit_len(atom); // = met0(atom): number of bits needed to represent the atom
-
-    let mut bits = Vec::new();
-
-    if n == 0 {
-        bits.push(true);
-        return bits;
-    }
-
-    let k = usize_bit_len(n); // met0(n)
-
-    bits.extend(std::iter::repeat(false).take(k));
-
-    bits.push(true);
-
-    if k > 1 {
-        let offset = n - (1usize << (k - 1)); // same as n & ((1 << (k-1)) - 1)
-        for i in 0..(k - 1) {
-            bits.push((offset >> i) & 1 == 1);
-        }
-    }
-
-    for i in 0..n {
-        bits.push(atom_get_bit(atom, i as u64));
-    }
-
-    bits
-}
-
-fn usize_bit_len(x: usize) -> usize {
-    if x == 0 { 1 } else { (usize::BITS - x.leading_zeros()) as usize }
-}
-
-fn atom_bit_len(atom: &ParsedAtom) -> usize {
-    match atom {
-        ParsedAtom::Small(0) => 0,
-        ParsedAtom::Small(x) => (128 - x.leading_zeros() as usize),
-        ParsedAtom::Big(x) => x.bits() as usize,
-    }
-}
-
-fn atom_get_bit(atom: &ParsedAtom, i: u64) -> bool {
-    match atom {
-        ParsedAtom::Small(x) => i < 128 && ((x >> i) & 1 == 1),
-        ParsedAtom::Big(x) => {
-            let byte_index = (i / 8) as usize;
-            let bit_index = (i % 8) as u8;
-            let bytes = x.to_bytes_le();
-            if byte_index < bytes.len() {
-                let byte = bytes[byte_index];
-                (byte >> bit_index) & 1 == 1
-            } else {
-                false
-            }
-        }
-    }
-}
-
-fn bits_to_atom(bits: &[bool]) -> ParsedAtom {
-    if bits.is_empty() {
-        return ParsedAtom::Small(0);
-    }
-
-    let len = bits.len();
-
-    if len <= 128 {
-        let mut val: u128 = 0;
-        for (i, &bit) in bits.iter().enumerate() {
-            if bit {
-                val |= 1u128 << i;
-            }
-        }
-        ParsedAtom::Small(val)
-    } else {
-        let mut big = BigUint::from(0u32);
-        for (i, &bit) in bits.iter().enumerate() {
-            if bit {
-                big += BigUint::from(1u32) << i;
-            }
-        }
-        ParsedAtom::Big(big)
-    }
-}
-
-#[derive(Debug)]
-enum ParseAction {
-    Start(u64),           // start parsing noun at cursor
-    CellHeadDone(u64, Box<NounExpr>), // head done, now parse tail at given cursor
-    FinishCell(Box<NounExpr>, Box<NounExpr>),
-    StoreBackref(u64),
-}
-fn rub_backref(bits: &[bool], cursor: &mut usize) -> Result<u64, Box<dyn std::error::Error>> {
-    let size = get_size(bits, cursor)?;
-    if size == 0 {
-        return Ok(0);
-    }
-    if size > 64 {
-        return Err("backref offset too large (>64 bits)".into());
-    }
-    if *cursor + size as usize > bits.len() {
-        return Err("not enough bits for backref".into());
-    }
-
-    let mut val: u64 = 0;
-    for i in 0..size {
-        if bits[*cursor + i as usize] {
-            val |= 1u64 << i;
-        }
-    }
-    *cursor += size as usize;
-    Ok(val)
-}
-
-fn rub_atom(bits: &[bool], cursor: &mut usize) -> Result<ParsedAtom, Box<dyn std::error::Error>> {
-    let size = get_size(bits, cursor)?;
-
-    if size == 0 {
-        return Ok(ParsedAtom::Small(0));
-    }
-
-    if *cursor + size as usize > bits.len() {
-        return Err("not enough bits for rub atom payload".into());
-    }
-
-    // Read `size` bits, LSB-first → value = sum bit_i * 2^i
-    if size <= 128 {
-        let mut val: u128 = 0;
-        for i in 0..size {
-            if bits[*cursor + i as usize] {
-                val |= 1u128 << i;
-            }
-        }
-        *cursor += size as usize;
-        Ok(ParsedAtom::Small(val))
-    } else {
-        // Use BigUint
-        let mut big = BigUint::from(0u32);
-        for i in 0..size {
-            if bits[*cursor + i as usize] {
-                big += BigUint::from(1u32) << i;
-            }
-        }
-        *cursor += size as usize;
-        Ok(ParsedAtom::Big(big))
-    }
-}
-
-fn get_size(bits: &[bool], cursor: &mut usize) -> Result<u64, &'static str> {
-    let start = *cursor;
-    // Count leading zeros
-    while *cursor < bits.len() && !bits[*cursor] {
-        *cursor += 1;
-    }
-
-    if *cursor >= bits.len() {
-        return Err("unexpected EOF in rub size prefix");
-    }
-
-    let c = (*cursor - start) as u32; // number of leading zeros
-    *cursor += 1; // consume the '1'
-
-    if c == 0 {
-        Ok(0)
-    } else {
-        // Read c-1 bits
-        if *cursor + (c - 1) as usize > bits.len() {
-            return Err("not enough bits for rub size field");
-        }
-
-        let mut x = 0u64;
-        for i in 0..(c - 1) {
-            if bits[*cursor + i as usize] {
-                x |= 1u64 << i; // LSB-first: first bit = 2^0
-            }
-        }
-        *cursor += (c - 1) as usize;
-
-        let size = (1u64 << (c - 1)) + x;
-        Ok(size)
-    }
-}
-
-fn atom_to_bits(atom: &ParsedAtom) -> Vec<bool> {
-    match atom {
-        ParsedAtom::Small(x) => {
-            let mut bits = Vec::with_capacity(128);
-            for i in 0..128 {
-                bits.push((x >> i) & 1 == 1);
-            }
-            // Trim trailing zeros beyond highest set bit? Not needed — cue stops when done.
-            bits
-        }
-        ParsedAtom::Big(x) => {
-            // Convert to little-endian bytes, then bits
-            let bytes = x.to_bytes_le();
-            let mut bits = Vec::new();
-            for &byte in &bytes {
-                for i in 0..8 {
-                    bits.push((byte >> i) & 1 == 1);
-                }
-            }
-            // Pad to next multiple of 8? Not necessary.
-            bits
-        }
-    }
-}
-
-fn cue_inner( // rename
-    bits: &[bool],
-    cursor: usize,
-    backrefs: &mut HashMap<u64, NounExpr>,
-) -> Result<(NounExpr, usize), Box<dyn std::error::Error>> {
-    if cursor >= bits.len() {
-        return Err("unexpected EOF".into());
-    }
-
-    let tag0 = bits[cursor];
-    if !tag0 {
-        let mut cur = cursor + 1;
-        let atom = rub_atom(bits, &mut cur)?;
-        let noun = NounExpr::ParsedAtom(atom);
-        backrefs.insert(cursor as u64, noun.clone());
-        Ok((noun, cur))
-    } else {
-        if cursor + 1 >= bits.len() {
-            return Err("unexpected EOF after tag 1".into());
-        }
-        let tag1 = bits[cursor + 1];
-        if !tag1 {
-            let mut cur = cursor + 2;
-            let (head, next) = cue_inner(bits, cur, backrefs)?;
-            cur = next;
-            let (tail, next2) = cue_inner(bits, cur, backrefs)?;
-            cur = next2;
-            let noun = NounExpr::Cell(Box::new(head), Box::new(tail));
-            backrefs.insert(cursor as u64, noun.clone());
-            Ok((noun, cur))
-        } else {
-            let mut cur = cursor + 2;
-            let offset = rub_backref(bits, &mut cur)?;
-
-            let noun = backrefs
-                .get(&(offset))
-                .cloned()
-                .ok_or_else(|| format!("backref to {} not found", offset))?;
-            Ok((noun, cur))
-        }
-    }
 }
 
 pub fn crub<'src>(
@@ -8731,6 +8786,10 @@ fn atom_to_tas_string(atom: &DirectAtom) -> String {
         String::new()
     }
 }
+
+//
+//  AST to Noun(Slab)
+//
 
 pub fn hoon_to_noun(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
     use Hoon::*;
@@ -10300,26 +10359,6 @@ fn tuna_tail_to_noun(slab: &mut NounSlab, tail: &TunaTail) -> Noun {
     }
 }
 
-    // pub fn lth_b(slab: &mut NounSlab, a: Atom, b: Atom) -> bool {
-    //     if let (Ok(a), Ok(b)) = (a.as_direct(), b.as_direct()) {
-    //         a.data() < b.data()
-    //     } else if a.bit_size() > b.bit_size() {
-    //         false
-    //     } else if a.bit_size() < b.bit_size() {
-    //         true
-    //     } else {
-    //         a.as_ubig(stack) < b.as_ubig(stack)
-    //     }
-    // }
-
-    // pub fn lth(slab: &mut NounSlab, a: Atom, b: Atom) -> Noun {
-    //     if lth_b(stack, a, b) {
-    //         YES
-    //     } else {
-    //         NO
-    //     }
-    // }
-
 pub fn dor_slab(a: Noun, b: Noun) -> Noun {
     if unsafe { a.raw_equals(&b) } {
         YES
@@ -10390,60 +10429,6 @@ pub fn mor_slab(a: Noun, b: Noun) -> Noun {
         Ordering::Less => YES,
         Ordering::Equal => dor_slab(a, b),
     }
-}
-
-pub fn atom_less_than(a: Atom, b: Atom) -> Noun {
-    if atom_less_than_b(&a, &b) {
-        YES
-    } else {
-        NO
-    }
-}
-
-fn atom_less_than_b(a: &Atom, b: &Atom) -> bool {
-    if let (Some(a_direct), Some(b_direct)) = (a.direct(), b.direct()) {
-        return unsafe { a_direct.data() < b_direct.data() };
-    }
-
-    let a_bits = a.bit_size();
-    let b_bits = b.bit_size();
-
-    if a_bits != b_bits {
-        return a_bits < b_bits;
-    }
-
-    if a_bits <= 64 && b_bits <= 64 {
-        if let (Ok(a_u64), Ok(b_u64)) = (a.as_u64(), b.as_u64()) {
-            return a_u64 < b_u64;
-        }
-    }
-
-    let a_limbs = if a.is_direct() {
-        &[unsafe { a.direct().unwrap().data() }]
-    } else {
-        unsafe { std::slice::from_raw_parts(a.data_pointer(), a.size()) }
-    };
-
-    let b_limbs = if b.is_direct() {
-        &[unsafe { b.direct().unwrap().data() }]
-    } else {
-        unsafe { std::slice::from_raw_parts(b.data_pointer(), b.size()) }
-    };
-
-    let max_limbs = a_limbs.len().max(b_limbs.len());
-    for i in 0..max_limbs {
-        let a_idx = a_limbs.len().wrapping_sub(1).wrapping_sub(i);
-        let b_idx = b_limbs.len().wrapping_sub(1).wrapping_sub(i);
-
-        let a_limb = if a_idx < a_limbs.len() { a_limbs[a_idx] } else { 0 };
-        let b_limb = if b_idx < b_limbs.len() { b_limbs[b_idx] } else { 0 };
-
-        if a_limb != b_limb {
-            return a_limb < b_limb;
-        }
-    }
-
-    false
 }
 
 pub fn collect_inputs(path: &PathBuf) -> Vec<PathBuf> {
