@@ -50,7 +50,7 @@ where
 }
 
 //
-// String -> ParsedAtom conversion functions
+//  String -> ParsedAtom conversion
 //
 
 pub fn string_to_atom(s: String) -> ParsedAtom {
@@ -3273,6 +3273,14 @@ fn gah<'src>() -> impl Parser<'src, &'src str, (), Err<'src>> {
 
 }
 
+pub fn gaw<'src>() -> impl Parser<'src, &'src str, (), Err<'src>> {
+    choice((vul(),
+            gah()))
+    .repeated()
+    .ignored()
+    .labelled("WhiteSpace")
+}
+
 pub fn vul<'src>() -> impl Parser<'src, &'src str, (), Err<'src>> {
     just("::")
         .ignore_then(non_control_char().repeated())
@@ -5435,12 +5443,11 @@ pub fn bitcoin_address<'src>(
 }
 
 pub fn urs<'src>(
-) -> impl Parser<'src, &'src str, ParsedAtom, Err<'src>> {
+) -> impl Parser<'src, &'src str, String, Err<'src>> {
     any()
         .filter(|c: &char| matches!(c, '0'..='9' | 'a'..='z' | '.' | '_' | '~' | '-'))
         .repeated()
         .collect::<String>()
-        .map(string_to_atom)
 }
 
 pub fn urt<'src>(
@@ -6260,6 +6267,37 @@ pub fn wack(a: &str) -> String {
 
 pub fn reap<T: Clone>(a: usize, b: T) -> Vec<T> {
     vec![b; a]
+}
+
+pub fn version_pin<'src>(
+) -> impl Parser<'src, &'src str, (), Err<'src>>
+{
+    just("/?")
+        .ignore_then(gap())
+        .ignore_then(decimal_without_leading_zero().to(()))
+        .ignore_then(gap())
+        .ignored()
+}
+
+pub fn stap<'src>(
+) -> impl Parser<'src, &'src str, Path, Err<'src>>
+{
+    just('/')
+    .ignore_then(urs()
+                .separated_by(just('/'))
+                .collect::<Path>()
+                .map(|p| {
+                    // if path is empty:  /
+                    if p == vec!["".to_string()] {
+                        return vec![];
+                    }
+                    // if last element is empty:  /foo/bar/
+                    if (p.last().is_some_and(|s| s.is_empty())) {
+                        return vec![];
+                    }
+                    return p;
+                })
+        ).labelled("Path")
 }
 
 pub fn path<'src>(
@@ -8245,7 +8283,7 @@ pub fn crub<'src>(
             phonemic_name().map(|p| Coin::Dime("p".to_string(), p)),
             just('.')
                 .ignore_then(urs())
-                .map(|atom| Coin::Dime("ta".to_string(), atom)),
+                .map(|atom| Coin::Dime("ta".to_string(), string_to_atom(atom))),
             just('~')
                 .ignore_then(urx())
                 .map(|atom| Coin::Dime("t".to_string(), atom)),
@@ -10431,6 +10469,63 @@ pub fn mor_slab(a: Noun, b: Noun) -> Noun {
     }
 }
 
+pub fn pile_to_noun(slab: &mut NounSlab, pile: &Pile) -> Noun {
+    let sur_noun = {
+        let mut items = Vec::new();
+        for (opt_term, term) in pile.sur.clone() {
+            let opt_noun = opt_term.map_or_else(|| D(0u64), |t| term_to_noun(slab, &t));
+            let term_noun = term_to_noun(slab, &term);
+            items.push(T(slab, &[opt_noun, term_noun]));
+        }
+        list_to_noun(slab, items)
+    };
+
+    let lib_noun = {
+        let mut items = Vec::new();
+        for (opt_term, term) in pile.lib.clone() {
+            let opt_noun = opt_term.map_or_else(|| D(0u64), |t| term_to_noun(slab, &t));
+            let term_noun = term_to_noun(slab, &term);
+            items.push(T(slab, &[opt_noun, term_noun]));
+        }
+        list_to_noun(slab, items)
+    };
+
+    let raw_noun = {
+        let mut items = Vec::new();
+        for (opt_term, path) in pile.raw.clone() {
+            let opt_noun = opt_term.map_or_else(|| D(0u64), |t| term_to_noun(slab, &t));
+            let path_noun = path_to_noun(slab, &path);
+            items.push(T(slab, &[opt_noun, path_noun]));
+        }
+        list_to_noun(slab, items)
+    };
+
+    let bar_noun = {
+        let mut items = Vec::new();
+        for (term1, term2, path) in pile.bar.clone() {
+            let t1_noun = term_to_noun(slab, &term1);
+            let t2_noun = term_to_noun(slab, &term2);
+            let path_noun = path_to_noun(slab, &path);
+            items.push(T(slab, &[t1_noun, t2_noun, path_noun]));
+        }
+        list_to_noun(slab, items)
+    };
+
+    let hax_noun = {
+        let mut items = Vec::new();
+        for (opt_term, term) in pile.hax.clone() {
+            let opt_noun = opt_term.map_or_else(|| D(0u64), |t| term_to_noun(slab, &t));
+            let term_noun = term_to_noun(slab, &term);
+            items.push(T(slab, &[opt_noun, term_noun]));
+        }
+        list_to_noun(slab, items)
+    };
+
+    let hoon_noun = hoon_to_noun(slab, &pile.hoon);
+
+    T(slab, &[sur_noun, lib_noun, raw_noun, bar_noun, hax_noun, hoon_noun])
+}
+
 pub fn collect_inputs(path: &PathBuf) -> Vec<PathBuf> {
     let mut files = Vec::new();
     collect_inputs_inner(path, &mut files);
@@ -10462,4 +10557,3 @@ fn collect_inputs_inner(path: &PathBuf, out: &mut Vec<PathBuf>) {
         std::process::exit(2);
     }
 }
-

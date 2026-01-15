@@ -505,6 +505,33 @@ pub struct Date {
     pub t: Tarp,     // time-of-day + day-of-month in tarp.d
 }
 
+pub type Taut = (Option<Term>, Term);
+
+//  Parser return type
+//
+#[derive(serde::Serialize, PartialEq, Debug, Clone)]
+pub struct Pile {
+    pub sur: Vec<Taut>,                        // /-
+    pub lib: Vec<Taut>,                        // /+
+    pub raw: Vec<(Option<Term>, Path)>,        // /=
+    pub bar: Vec<(Term, Term, Path)>,          // /*
+    pub hax: Vec<Taut>,                        // /#
+    pub hoon: Hoon,
+}
+
+impl Default for Pile {
+    fn default() -> Self {
+        Self {
+            sur: vec![],
+            lib: vec![],
+            raw: vec![],
+            bar: vec![],
+            hax: vec![],
+            hoon: Hoon::ZapZap,
+        }
+    }
+}
+
 #[derive(serde::Serialize, PartialEq, Debug, Clone)]
 pub enum Hoon {
     Pair(Box<Hoon>, Box<Hoon>),

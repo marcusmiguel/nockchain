@@ -340,13 +340,6 @@ pub fn hoon_parser<'src>(
                 dot_runes_wide(hoon_wide.clone(), spec_wide.clone())
             ),
 
-            just('/')  // skip imports...
-                .ignore_then(fas_runes_tall(hoon.clone(),
-                                            hoon_wide.clone(),
-                                            wer.clone(),
-                                            linemap.clone()))
-                                            .boxed(),
-
             hoon_wide.clone().boxed(),
 
             noun_tall(hoon.clone()).boxed(),
@@ -359,7 +352,7 @@ pub fn parser<'src>(
     wer: Path,
     bug: bool,
     linemap: Arc<LineMap>,
-) -> impl Parser<'src, &'src str, Hoon, Err<'src>> {
+) -> impl Parser<'src, &'src str, Pile, Err<'src>> {
 
     let mut hoon                = Recursive::declare();
     let mut hoon_wide           = Recursive::declare();
@@ -475,12 +468,22 @@ pub fn parser<'src>(
 
     let hoon = if bug { hoon } else { hoon_no_trace };
 
-    hoon
-    .separated_by(gap())
-    .at_least(1)
-    .collect::<Vec<Hoon>>()
-    .map(|hoons| Hoon::TisSig(hoons))
-    .delimited_by(gap().or_not(), gap().or_not())
+    let file_body =
+        hoon
+        .separated_by(gap())
+        .at_least(1)
+        .collect::<Vec<Hoon>>()
+        .map(|hoons| Hoon::TisSig(hoons))
+        .delimited_by(gap().or_not(), gap()
+                                      .or_not()
+                                      .ignore_then(version_pin().or_not()));
+
+    parse_imports()
+    .then(file_body)
+    .map(|(mut pile, body)| {
+        pile.hoon = body;
+        pile
+    })
     .boxed()
 }
 
@@ -532,15 +535,18 @@ fn run_test() {
         .parse(source.as_str())
         .into_result()
     {
-        Ok(res) => {
+        Ok(pile) => {
             let end = start.elapsed();
 
             let mut slab = NounSlab::new();
-            let parsed_hoon = hoon_to_noun(&mut slab, &res);
+
             let jammed = Bytes::from(HOON138JAM);
             let cued = slab.cue_into(jammed).unwrap();
 
-            diff_and_report(&cued, &parsed_hoon);
+            let expected_parsed_hoon = T(&mut slab, &[D(0), D(0), D(0), D(0), D(0), cued]);
+            let actual_parsed_hoon = pile_to_noun(&mut slab, &pile);
+
+            diff_and_report(&expected_parsed_hoon, &actual_parsed_hoon);
 
             println!("test parsing took: {:?}", end);
         }
@@ -587,12 +593,12 @@ fn run_parser(source_path: &PathBuf, jam: bool, dbug: bool, out: Option<PathBuf>
         .parse(source.as_str())
         .into_result()
     {
-        Ok(res) => {
+        Ok(pile) => {
             let took = start.elapsed();
 
             let mut slab = NounSlab::new();
             let start2 = Instant::now();
-            let parsed_hoon = hoon_to_noun(&mut slab, &res);
+            let parsed_hoon = pile_to_noun(&mut slab, &pile);
             let took2 = start2.elapsed();
 
             if jam {
@@ -610,7 +616,7 @@ fn run_parser(source_path: &PathBuf, jam: bool, dbug: bool, out: Option<PathBuf>
                     None => std::io::stdout().write_all(&jammed).unwrap(),
                 }
             } else {
-                let json = serde_json::to_string_pretty(&res)
+                let json = serde_json::to_string_pretty(&pile)
                     .expect("AST JSON serialization failed");
 
                 match &out {
