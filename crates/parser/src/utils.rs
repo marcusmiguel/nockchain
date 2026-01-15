@@ -1,4 +1,3 @@
-use std::collections::*;
 use crate::ast::hoon::*;
 use nockvm::noun::{D, T, YES, NO, Noun, Atom, DIRECT_MAX, DirectAtom};
 use nockvm_macros::tas;
@@ -9,11 +8,7 @@ use either::Either::{Left, Right};
 use std::cmp;
 use std::cmp::Ordering;
 use std::sync::Arc;
-use std::str::FromStr;
-use std::hash::{Hash, Hasher, DefaultHasher};
 use std::path::PathBuf;
-use std::rc::Rc;
-use std::cell::Cell;
 use std::collections::HashMap;
 use num_bigint::BigUint;
 use std::ops::BitAnd;
@@ -22,20 +17,12 @@ use nockapp::noun::slab::NounSlab;
 use num_traits::{One, Num, FromPrimitive, ToPrimitive};
 use num_traits::identities::Zero;
 use sha2::{Sha256, Digest};
-use bitvec::prelude::*;
-use bitvec::vec::BitVec;
-use bitvec::slice::BitSlice;
-use bitvec::order::Lsb0;
 use ibig::UBig;
 use chumsky::{
     span::Span,
-    input::{Stream, ValueInput, Input, StrInput},
     input::MapExtra,
     prelude::*,
 };
-use std::fs::File;
-use serde_json::{json, Value};
-use std::io::{BufWriter, Write};
 pub type Err<'src> = extra::Full<Rich<'src, char>, (), ()>;
 
 pub trait ParserExt<'src, O>:
@@ -232,7 +219,7 @@ pub fn met(bloq: usize, atom: &ParsedAtom) -> usize {
 
 /// rep: assemble list of ParsedAtoms into one ParsedAtom using bite spec
 ///
-/// - `bloq`: block size exponent (e.g. 3 → 8-bit blocks)
+/// - `bloq`: block size exponent
 /// - `step_opt`: number of bloqs to take from each atom; if `None`, defaults to 1 (per Hoon ?^(a a [a *step]))
 /// - `list`: slice of ParsedAtoms (representing Hoon `(list @)`)
 ///
@@ -384,13 +371,9 @@ pub fn cut(bloq: usize, start: usize, run: usize, atom: &ParsedAtom) -> ParsedAt
                 ParsedAtom::Small(*n & mask)
             }
         }
-        ParsedAtom::Big(b) => {  // b: &BigUint
+        ParsedAtom::Big(b) => {
             if bit_len <= 128 {
-                // Extract low 128 bits manually (portable)
                 let low_u128 = {
-                    // Convert to u128, but preserve low bits even if truncated
-                    // u128::try_from returns Err for >u128::MAX, but we want modulo 2^128
-                    // So: take first 2 u64 limbs
                     let mut limbs = b.iter_u64_digits();
                     let lo = limbs.next().unwrap_or(0);
                     let hi = limbs.next().unwrap_or(0);
@@ -403,10 +386,8 @@ pub fn cut(bloq: usize, start: usize, run: usize, atom: &ParsedAtom) -> ParsedAt
                 };
                 ParsedAtom::Small(low_u128 & mask)
             } else {
-                // Big mask: (1 << bit_len) - 1
                 let mask = (BigUint::one() << bit_len) - BigUint::one();
-                // Use & with references to avoid move
-                let masked = b & &mask; // &BigUint & &BigUint → BigUint
+                let masked = b & &mask;
                 ParsedAtom::from_biguint(masked)
             }
         }
@@ -737,7 +718,7 @@ fn offset_to_atom(offset: usize) -> ParsedAtom {
 }
 
 fn mat_bits(atom: &ParsedAtom) -> Vec<bool> {
-    let n = atom_bit_len(atom); // = met0(atom): number of bits needed to represent the atom
+    let n = atom_bit_len(atom);
 
     let mut bits = Vec::new();
 
@@ -746,14 +727,14 @@ fn mat_bits(atom: &ParsedAtom) -> Vec<bool> {
         return bits;
     }
 
-    let k = usize_bit_len(n); // met0(n)
+    let k = usize_bit_len(n);
 
     bits.extend(std::iter::repeat(false).take(k));
 
     bits.push(true);
 
     if k > 1 {
-        let offset = n - (1usize << (k - 1)); // same as n & ((1 << (k-1)) - 1)
+        let offset = n - (1usize << (k - 1));
         for i in 0..(k - 1) {
             bits.push((offset >> i) & 1 == 1);
         }
@@ -773,7 +754,7 @@ fn usize_bit_len(x: usize) -> usize {
 fn atom_bit_len(atom: &ParsedAtom) -> usize {
     match atom {
         ParsedAtom::Small(0) => 0,
-        ParsedAtom::Small(x) => (128 - x.leading_zeros() as usize),
+        ParsedAtom::Small(x) => 128 - x.leading_zeros() as usize,
         ParsedAtom::Big(x) => x.bits() as usize,
     }
 }
@@ -854,7 +835,6 @@ fn rub_atom(bits: &[bool], cursor: &mut usize) -> Result<ParsedAtom, Box<dyn std
         return Err("not enough bits for rub atom payload".into());
     }
 
-    // Read `size` bits, LSB-first → value = sum bit_i * 2^i
     if size <= 128 {
         let mut val: u128 = 0;
         for i in 0..size {
@@ -865,7 +845,6 @@ fn rub_atom(bits: &[bool], cursor: &mut usize) -> Result<ParsedAtom, Box<dyn std
         *cursor += size as usize;
         Ok(ParsedAtom::Small(val))
     } else {
-        // Use BigUint
         let mut big = BigUint::from(0u32);
         for i in 0..size {
             if bits[*cursor + i as usize] {
@@ -1077,7 +1056,6 @@ pub fn interface(
     }
 }
 
-// TODO: accept args by ref?
 pub fn spore(spec: Spec,
                 dom: u64,
                 hay: WingType,
@@ -2435,7 +2413,7 @@ pub fn open(gen: Hoon) -> Hoon {
                         )
                     }
                 }
-            };
+            }
 
             let tail = loop_tail(p, q);
 
@@ -3351,7 +3329,7 @@ pub fn list_names_wide<'src>(
     .separated_by(just(' '))
     .at_least(1)
     .collect::<Vec<_>>()
-    .delimited_by(just("["), just("]"))
+    .delimited_by(just('['), just(']'))
 }
 
 pub fn winglist<'src>(
@@ -5534,21 +5512,17 @@ pub fn urx<'src>(
 
 // tuft: ParsedAtom (codepoint) -> ParsedAtom (UTF-8 bytes, @t)
 pub fn tuft(atom: &ParsedAtom) -> ParsedAtom {
-    // This builds a little-endian byte list, then rap 3 packs it
     let mut bytes: Vec<u8> = Vec::new();
     let mut a = atom.clone();
 
     loop {
-        // ?: =(`@`0 a)
         if a.is_zero() {
             break;
         }
 
-        // b=(end 5 a)
         let b_atom = end(5, 1, &a);
         let b = b_atom.to_u128().unwrap();
 
-        // c=$(a (rsh 5 a))
         a = rsh(5, 1, &a);
 
         if b <= 0x7f {
@@ -5593,7 +5567,6 @@ pub fn tuft(atom: &ParsedAtom) -> ParsedAtom {
         );
     }
 
-    // rap 3: pack bytes little-endian into @t
     let mut acc: u128 = 0;
     for (i, byte) in bytes.iter().enumerate() {
         acc |= (*byte as u128) << (i * 8);
@@ -5624,7 +5597,7 @@ fn teff(atom: &ParsedAtom) -> usize {
     else if b <= 0xDF { 2 }
     else if b <= 0xEF { 3 }
     else if b <= 0xF4 { 4 }
-    else { 1 } // invalid → skip 1 byte
+    else { 1 }
 }
 
 // --- Decode one UTF-8 codepoint ---
@@ -6292,7 +6265,7 @@ pub fn stap<'src>(
                         return vec![];
                     }
                     // if last element is empty:  /foo/bar/
-                    if (p.last().is_some_and(|s| s.is_empty())) {
+                    if p.last().is_some_and(|s| s.is_empty()) {
                         return vec![];
                     }
                     return p;
@@ -6964,19 +6937,19 @@ fn into(mut tape: Tape, idx: usize, ch: &str) -> Tape {
     tape
 }
 
-fn atom_to_char(atom: &ParsedAtom) -> char {
-    let code = match atom {
-        ParsedAtom::Small(x) => *x as u32,
-        ParsedAtom::Big(b) => {
-            if *b > BigUint::from(u32::MAX) {
-                0xFFFD //  replacement
-            } else {
-                b.clone().try_into().unwrap_or(0xFFFD)
-            }
-        }
-    };
-    std::char::from_u32(code).unwrap_or('\u{FFFD}')
-}
+// fn atom_to_char(atom: &ParsedAtom) -> char {
+//     let code = match atom {
+//         ParsedAtom::Small(x) => *x as u32,
+//         ParsedAtom::Big(b) => {
+//             if *b > BigUint::from(u32::MAX) {
+//                 0xFFFD //  replacement
+//             } else {
+//                 b.clone().try_into().unwrap_or(0xFFFD)
+//             }
+//         }
+//     };
+//     std::char::from_u32(code).unwrap_or('\u{FFFD}')
+// }
 
 fn d_ne(tig: u128) -> char {
     (tig as u8 + b'0') as char
@@ -7119,18 +7092,18 @@ fn v_co(min: usize, dat: &ParsedAtom) -> Tape {
     )
 }
 
-fn w_co(min: usize, dat: &ParsedAtom) -> Tape {
-    em_co(
-        64,
-        min,
-        |_, b, c| {
-            let ch = w_ne(b).to_string();
-            std::iter::once(ch).chain(c).collect::<Vec<String>>()
-        },
-        dat,
-        vec![],
-    )
-}
+// fn w_co(min: usize, dat: &ParsedAtom) -> Tape {
+//     em_co(
+//         64,
+//         min,
+//         |_, b, c| {
+//             let ch = w_ne(b).to_string();
+//             std::iter::once(ch).chain(c).collect::<Vec<String>>()
+//         },
+//         dat,
+//         vec![],
+//     )
+// }
 
 fn c_co(dat: &ParsedAtom) -> Tape {
     em_co(
@@ -7562,11 +7535,9 @@ pub fn yall(day: u64) -> (u64, u64, u64) {
     let mut cet = 0;
     let mut lep = false;
 
-    // => .(era (div day era:yo), day (mod day era:yo))
     era = day / ERA;
     day %= ERA;
 
-    // ?: (lth day +(cet:yo)) ...
     if day < CETY + 1 {
         lep = true;
         cet = 0;
@@ -7579,7 +7550,6 @@ pub fn yall(day: u64) -> (u64, u64, u64) {
 
     let mut yer = 400 * era + 100 * cet;
 
-    // |- loop: subtract years
     loop {
         let dis = if lep { 366 } else { 365 };
         if day < dis {
@@ -7587,13 +7557,10 @@ pub fn yall(day: u64) -> (u64, u64, u64) {
         }
         let ner = yer + 1;
         day = day - dis;
-        // lep =(0 (end [0 2] ner)) → is ner divisible by 4? (end [0 2] = lowest 2 bits)
-        // end(0, 2, ner) = lowest 2 bits; =0 means divisible by 4
         lep = (ner & 3) == 0; // faster than atom ops
         yer = ner;
     }
 
-    // month loop
     let cah = if lep { &MOY } else { &MOH };
     let mut mot = 0;
     loop {
@@ -7606,12 +7573,7 @@ pub fn yall(day: u64) -> (u64, u64, u64) {
     }
 }
 
-fn is_leap(year: u64) -> bool {
-    (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0)
-}
-
 pub fn is_leap_year(year: i32) -> bool {
-    // Gregorian calendar proleptic
     (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0)
 }
 
@@ -7772,8 +7734,8 @@ pub fn hif<'src>(
 {
     tip()
     .then(tiq())
-    .try_map(|(p, q), span| {
-        Ok((p as u16) * 256 + (q as u16))
+    .map(|(p, q)| {
+        (p as u16) * 256 + (q as u16)
     })
 }
 
@@ -7866,9 +7828,9 @@ pub fn phonemic_name<'src>(
                     });
     let star = tep
                 .then(tiq())
-                .try_map(|(p, q), span| {
+                .map(|(p, q)| {
                     let x = (p as u16) * 256 + (q as u16);
-                    Ok(ParsedAtom::Small(x as u128))
+                    ParsedAtom::Small(x as u128)
                 });
     let galaxy = tiq().map(|p| ParsedAtom::Small(p.into()));
 
@@ -8049,79 +8011,78 @@ fn fen(
     &arr * a + ell
 }
 
-fn fe<F>(r: u64, a: &ParsedAtom, b: &ParsedAtom, prf: &F, m: &ParsedAtom) -> ParsedAtom 
-where
-    F: Fn(u64, &ParsedAtom) -> ParsedAtom,
-{
-    let mut j: u64 = 1;
-    let mut ell = end(0, met(0, a), m); // m mod a = lowest (bitlen a) bits of m
-    let mut arr = rsh(0, met(0, a), m); // m div a = m >> (bitlen a)
+// fn fe<F>(r: u64, a: &ParsedAtom, b: &ParsedAtom, prf: &F, m: &ParsedAtom) -> ParsedAtom 
+// where
+//     F: Fn(u64, &ParsedAtom) -> ParsedAtom,
+// {
+//     let mut j: u64 = 1;
+//     let mut ell = end(0, met(0, a), m); // m mod a = lowest (bitlen a) bits of m
+//     let mut arr = rsh(0, met(0, a), m); // m div a = m >> (bitlen a)
 
-    loop {
-        if j > r {
-            if r % 2 == 1 {
-                let shifted = match &arr {
-                    ParsedAtom::Small(n) => {
-                        let shifted_n = n.checked_shl(16).unwrap_or(0);
-                        ParsedAtom::Small(shifted_n) | ell.clone()
-                    }
-                    ParsedAtom::Big(big) => {
-                        let shifted = (big.clone() << 16) + ell.to_biguint();
-                        ParsedAtom::Big(shifted)
-                    }
-                };
-                return shifted;
-            } else {
-                // even rounds
-                if arr.eq(a) {
-                    let a_bits = met(0, a);
-                    let shifted_a = rsh(0, 0, a); // identity
-                    let shifted = match a {
-                        ParsedAtom::Small(n) => {
-                            let shifted_n = n.checked_shl(a_bits as u32).unwrap_or(0);
-                            ParsedAtom::Small(shifted_n) | ell.clone()
-                        }
-                        ParsedAtom::Big(big) => {
-                            let shifted = (big.clone() << a_bits) + ell.to_biguint();
-                            ParsedAtom::Big(shifted)
-                        }
-                    };
-                    return shifted;
-                } else {
-                    let a_bits = met(0, a);
-                    let shifted = match &ell {
-                        ParsedAtom::Small(n) => {
-                            let shifted_n = n.checked_shl(a_bits as u32).unwrap_or(0);
-                            ParsedAtom::Small(shifted_n) | arr.clone()
-                        }
-                        ParsedAtom::Big(big) => {
-                            let shifted = (big.clone() << a_bits) + arr.to_biguint();
-                            ParsedAtom::Big(shifted)
-                        }
-                    };
-                    return shifted;
-                }
-            }
-        }
+//     loop {
+//         if j > r {
+//             if r % 2 == 1 {
+//                 let shifted = match &arr {
+//                     ParsedAtom::Small(n) => {
+//                         let shifted_n = n.checked_shl(16).unwrap_or(0);
+//                         ParsedAtom::Small(shifted_n) | ell.clone()
+//                     }
+//                     ParsedAtom::Big(big) => {
+//                         let shifted = (big.clone() << 16) + ell.to_biguint();
+//                         ParsedAtom::Big(shifted)
+//                     }
+//                 };
+//                 return shifted;
+//             } else {
+//                 if arr.eq(a) {
+//                     let a_bits = met(0, a);
+//                     let shifted_a = rsh(0, 0, a); // identity
+//                     let shifted = match a {
+//                         ParsedAtom::Small(n) => {
+//                             let shifted_n = n.checked_shl(a_bits as u32).unwrap_or(0);
+//                             ParsedAtom::Small(shifted_n) | ell.clone()
+//                         }
+//                         ParsedAtom::Big(big) => {
+//                             let shifted = (big.clone() << a_bits) + ell.to_biguint();
+//                             ParsedAtom::Big(shifted)
+//                         }
+//                     };
+//                     return shifted;
+//                 } else {
+//                     let a_bits = met(0, a);
+//                     let shifted = match &ell {
+//                         ParsedAtom::Small(n) => {
+//                             let shifted_n = n.checked_shl(a_bits as u32).unwrap_or(0);
+//                             ParsedAtom::Small(shifted_n) | arr.clone()
+//                         }
+//                         ParsedAtom::Big(big) => {
+//                             let shifted = (big.clone() << a_bits) + arr.to_biguint();
+//                             ParsedAtom::Big(shifted)
+//                         }
+//                     };
+//                     return shifted;
+//                 }
+//             }
+//         }
 
-        let f = prf(j - 1, &arr);
+//         let f = prf(j - 1, &arr);
 
-        let modulus = if j % 2 == 1 { a } else { b };
-        let sum = match (&f, &ell) {
-            (ParsedAtom::Small(x), ParsedAtom::Small(y)) => ParsedAtom::Small(x.wrapping_add(*y)),
-            _ => {
-                let bx = f.to_biguint();
-                let by = ell.to_biguint();
-                ParsedAtom::Big(&bx + &by)
-            }
-        };
-        let tmp = end(0, met(0, modulus), &sum); // sum mod modulus
+//         let modulus = if j % 2 == 1 { a } else { b };
+//         let sum = match (&f, &ell) {
+//             (ParsedAtom::Small(x), ParsedAtom::Small(y)) => ParsedAtom::Small(x.wrapping_add(*y)),
+//             _ => {
+//                 let bx = f.to_biguint();
+//                 let by = ell.to_biguint();
+//                 ParsedAtom::Big(&bx + &by)
+//             }
+//         };
+//         let tmp = end(0, met(0, modulus), &sum); // sum mod modulus
 
-        ell = arr;
-        arr = tmp;
-        j += 1;
-    }
-}
+//         ell = arr;
+//         arr = tmp;
+//         j += 1;
+//     }
+// }
 
 pub fn feis(m: ParsedAtom) -> ParsedAtom {
     debug_assert!(m.lt(&ParsedAtom::Small(0xffff_0000)));
@@ -8249,7 +8210,8 @@ pub fn fynd_u64(cry: u64) -> u64 {
         return 0x1_0000 + tail(cry - 0x1_0000);
     }
 
-    if cry >= 0x1_0000_0000 && cry <= 0xffff_ffff_ffff_ffff {
+    if cry >= 0x1_0000_0000 {
+    // && cry <= 0xffff_ffff_ffff_ffff
         let lo = dis(cry, 0xffff_ffff);
         let hi = dis(cry, 0xffff_ffff_0000_0000);
         return con(hi, fynd_u64(lo));
@@ -8357,7 +8319,6 @@ pub fn parenthesis_spec<'src>(
 }
 
 pub fn reference_spec<'src>(
-    spec_wide:   impl ParserExt<'src, Spec>,
 ) -> impl Parser<'src, &'src str, Spec, Err<'src>>
 {
     let lower =
@@ -8792,38 +8753,37 @@ pub fn diff_and_report(a: &Noun, b: &Noun) {
     }
 }
 
-fn atom_to_tas_string(atom: &DirectAtom) -> String {
-    let val: u128 = atom.data() as u128;
-    if val == 0 { return String::new(); }
+// fn atom_to_tas_string(atom: &DirectAtom) -> String {
+//     let val: u128 = atom.data() as u128;
+//     if val == 0 { return String::new(); }
 
-    let bytes = val.to_le_bytes();
-    let mut null_seen = false;
-    let mut valid = true;
-    let mut len = 0;
+//     let bytes = val.to_le_bytes();
+//     let mut null_seen = false;
+//     let mut valid = true;
+//     let mut len = 0;
 
-    for &b in &bytes {
-        if b == 0 {
-            null_seen = true;
-        } else if null_seen {
-            valid = false;
-            break;
-        } else if !b.is_ascii_lowercase() && b != b'-' {
-            valid = false;
-            break;
-        } else {
-            len += 1;
-        }
+//     for &b in &bytes {
+//         if b == 0 {
+//             null_seen = true;
+//         } else if null_seen {
+//             valid = false;
+//             break;
+//         } else if !b.is_ascii_lowercase() && b != b'-' {
+//             valid = false;
+//             break;
+//         } else {
+//             len += 1;
+//         }
 
-        // Cap at 126 bytes (Urbit tas limit)
-        if len > 126 { valid = false; break; }
-    }
+//         if len > 126 { valid = false; break; }
+//     }
 
-    if valid && len > 0 {
-        format!("%{}", unsafe { std::str::from_utf8_unchecked(&bytes[..len]) })
-    } else {
-        String::new()
-    }
-}
+//     if valid && len > 0 {
+//         format!("%{}", unsafe { std::str::from_utf8_unchecked(&bytes[..len]) })
+//     } else {
+//         String::new()
+//     }
+// }
 
 //
 //  AST to Noun(Slab)
@@ -9729,7 +9689,7 @@ fn coil_to_noun(slab: &mut NounSlab, coil: &Coil) -> Noun {
     let semi_noun = semi_noun_expr_to_noun(slab, &coil.r.0);
 
     let tomes_entries: Vec<_> = coil.r.1.iter().map(|(k, v)| {
-        let (what, v) = v;
+        let (_what, v) = v;
         let k_noun = term_to_noun(slab, k);
         let inner_entries: Vec<_> = v.iter().map(|(kk, vv)| {
             (term_to_noun(slab, kk), hoon_to_noun(slab, vv))

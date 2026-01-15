@@ -1,10 +1,8 @@
 use crate::ast::hoon::*;
 use crate::utils::*;
 use chumsky::{
-    input::{Stream},
     prelude::*,
 };
-use std::collections::*;
 
 pub fn tis_runes_tall<'src>(
     hoon:      impl ParserExt<'src, Hoon>,

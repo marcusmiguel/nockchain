@@ -2,7 +2,6 @@
 use std::collections::*;
 use std::ops::BitOr;
 use num_bigint::BigUint;
-use serde::Serialize;
 use num_traits::Zero;
 
 #[derive(serde::Serialize, Hash, Eq, PartialEq, Debug, Clone)]
@@ -140,7 +139,6 @@ impl ParsedAtom {
 
 impl From<&str> for ParsedAtom {
     fn from(s: &str) -> Self {
-        // UTF-8 bytes, little-endian @
         let bytes: Vec<u8> = s.bytes().collect();
         let mut acc = BigUint::from(0u32);
         for &b in bytes.iter().rev() { // little-endian: first char = lowest byte
@@ -499,10 +497,10 @@ pub struct Tarp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Date {
-    pub era: bool,   // a=? — true = AD, false = BC 
-    pub y: u64,      // year (1-based; year 0 = 1 BC, year -1 = 2 BC, etc.)
-    pub m: u64,      // month (1–12)
-    pub t: Tarp,     // time-of-day + day-of-month in tarp.d
+    pub era: bool,
+    pub y: u64,
+    pub m: u64,
+    pub t: Tarp,
 }
 
 pub type Taut = (Option<Term>, Term);

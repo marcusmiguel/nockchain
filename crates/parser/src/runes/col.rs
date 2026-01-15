@@ -1,8 +1,6 @@
 use crate::ast::hoon::*;
 use crate::utils::*;
-use std::collections::*;
 use chumsky::{
-    input::{Stream, ValueInput},
     prelude::*,
 };
 

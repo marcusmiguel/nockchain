@@ -1,9 +1,6 @@
 use crate::ast::hoon::*;
 use crate::utils::*;
-use std::collections::*;
-use std::sync::Arc;
 use chumsky::{
-    input::{Stream, ValueInput},
     prelude::*,
 };
 

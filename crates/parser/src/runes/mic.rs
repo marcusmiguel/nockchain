@@ -1,10 +1,8 @@
 use crate::ast::hoon::*;
 use crate::utils::*;
 use chumsky::{
-    input::{Stream, ValueInput},
     prelude::*,
 };
-use std::collections::*;
 
 pub fn mic_runes_tall<'src>(
     hoon:      impl ParserExt<'src, Hoon>,
@@ -115,7 +113,7 @@ pub fn micfas<'src>(
 {
     gap()
     .ignore_then(hoon.clone())
-    .map(|(h)| Hoon::MicFas(Box::new(h)))
+    .map(|h| Hoon::MicFas(Box::new(h)))
 }
 
 pub fn micfas_wide<'src>(
@@ -124,7 +122,7 @@ pub fn micfas_wide<'src>(
 {
     hoon_wide.clone()
     .delimited_by(just('('), just(')'))
-    .map(|(h)| Hoon::MicFas(Box::new(h)))
+    .map(|h| Hoon::MicFas(Box::new(h)))
 }
 
 pub fn miccol<'src>(

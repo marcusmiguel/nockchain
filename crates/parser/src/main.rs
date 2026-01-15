@@ -1,25 +1,18 @@
-use clap::{Parser as ClapParser, command, arg};
+use clap::{Parser as ClapParser};
 
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use chumsky::{
-    input::{Stream, ValueInput, StrInput},
     prelude::*,
 };
 
 use std::fs;
-use std::rc::Rc;
-use std::collections::HashMap;
 use std::time::Instant;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::cell::Cell;
 use bytes::Bytes;
 use nockapp::noun::slab::NounSlab;
 use nockvm::noun::{D, T};
-use nockvm_macros::tas;
-use nockvm::noun::Atom;
-use ibig::ubig;
 use parser::ast::hoon::*;
 use parser::utils::*;
 use parser::runes::*;
@@ -78,7 +71,7 @@ fn spec_wide_parser<'src>(
         bucmic_spec_irregular(hoon_wide.clone()).boxed(),    //  ,p0
         buctis_irregular(spec_wide.clone()).boxed(),         // foo=bar, =bar,  =foo=bar
         buccol_irregular(spec_wide.clone()).boxed(),         // [foo=bar foo=bar]
-        reference_spec(spec_wide.clone()).boxed(),           // foo or foo:bar
+        reference_spec().boxed(),                            // foo or foo:bar
         bucwut_irregular_spec(spec_wide.clone()).boxed(),    // ?(foo bar)
         parenthesis_spec(hoon_wide.clone(),
                                 spec_wide.clone()).boxed(),  // (foo bar)
@@ -261,8 +254,6 @@ pub fn hoon_parser<'src>(
     hoon_no_trace: impl ParserExt<'src, Hoon>,
     hoon_wide_with_trace: impl ParserExt<'src, Hoon>,
     hoon_wide_no_trace: impl ParserExt<'src, Hoon>,
-    wer: Path,
-    linemap: Arc<LineMap>,
 ) -> impl Parser<'src, &'src str, Hoon, Err<'src>>
 {
     let parsers = vec![
@@ -407,10 +398,7 @@ pub fn parser<'src>(
                         hoon.clone(),
                         hoon_no_trace.clone(),
                         hoon_wide.clone(),
-                        hoon_wide_no_trace.clone(),
-                        wer.clone(),
-                        linemap.clone(),
-                        )
+                        hoon_wide_no_trace.clone())
                         .map_with(wrap_hoon_with_trace(wer.clone(), linemap.clone()))
                         .labelled("Hoon")
                         .boxed();
@@ -425,9 +413,7 @@ pub fn parser<'src>(
                         hoon.clone(),
                         hoon_no_trace.clone(),
                         hoon_wide.clone(),
-                        hoon_wide_no_trace.clone(),
-                        wer.clone(),
-                        linemap.clone())
+                        hoon_wide_no_trace.clone())
                         .labelled("Hoon")
                         .boxed();
 
@@ -487,7 +473,6 @@ pub fn parser<'src>(
     .boxed()
 }
 
-#[cfg(not(feature = "bazel_build"))]
 pub static HOON138JAM: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/test/parsed-hoon138.jam"
