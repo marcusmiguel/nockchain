@@ -858,7 +858,6 @@ fn rub_atom(bits: &[bool], cursor: &mut usize) -> Result<ParsedAtom, Box<dyn std
 
 fn get_size(bits: &[bool], cursor: &mut usize) -> Result<u64, &'static str> {
     let start = *cursor;
-    // Count leading zeros
     while *cursor < bits.len() && !bits[*cursor] {
         *cursor += 1;
     }
@@ -873,7 +872,6 @@ fn get_size(bits: &[bool], cursor: &mut usize) -> Result<u64, &'static str> {
     if c == 0 {
         Ok(0)
     } else {
-        // Read c-1 bits
         if *cursor + (c - 1) as usize > bits.len() {
             return Err("not enough bits for rub size field");
         }
@@ -3248,7 +3246,6 @@ fn gah<'src>() -> impl Parser<'src, &'src str, (), Err<'src>> {
         newline(),
     ))
     .labelled("Space or NewLine")
-
 }
 
 pub fn gaw<'src>() -> impl Parser<'src, &'src str, (), Err<'src>> {
@@ -5972,6 +5969,8 @@ pub fn flop<T: Clone>(list: impl AsRef<[T]>) -> Vec<T> {
     v
 }
 
+//  Path parsing
+
 fn poof(pax: Path) -> Vec<Hoon> {
     pax.iter()
         .map(|a| { Hoon::Sand(
@@ -6100,26 +6099,34 @@ pub fn posh(
     }
 }
 
+//  Parse Coin literal with escapes.
+//
 pub fn nusk<'src>(
 ) -> impl Parser<'src, &'src str, Coin, Err<'src>>
 {
     urt()
-    .try_map(|s, span| {
-           wick(s).ok_or_else(||
-                Rich::custom(span, format!("invalid knot escape in '{}'", s))
-            )
-        })
+    .validate(|s, extra, emit| {
+        let wicked = wick(s);
+        match wicked {
+            Some(w) => w,
+            None => {
+                emit.emit(Rich::custom(extra.span(), format!("Invalid Knot Escape in '{}'.", s)));
+                "".to_string()
+            }
+        }})
         .try_map(|unescaped: String, span| {
             let parsed = nuck().parse(&unescaped);
             match parsed.into_result() {
                 Ok(output) => Ok(output),
                 Err(_errors) => {
-                    Err(Rich::custom(span, "nuck parse failed"))
+                    Err(Rich::custom(span, "Literal parse failed."))
                 }
             }
         })
 }
 
+// Wraps Coin into Rock/Sand or Coltar
+//
 pub fn jock(rad: bool, lot: &Coin) -> Hoon {
     match lot {
         Coin::Dime(tag, atom) => {
@@ -6152,6 +6159,9 @@ pub fn jock(rad: bool, lot: &Coin) -> Hoon {
     }
 }
 
+// Parser Coin
+//    Coin: Noun-literal syntax cases.
+//
 pub fn nuck<'src>(
 ) -> impl Parser<'src, &'src str, Coin, Err<'src>>
 {
@@ -6167,6 +6177,8 @@ pub fn nuck<'src>(
     )).boxed()
 }
 
+// Parses a $coin literal without their respective standard prefixes.
+//
 pub fn perd<'src>(
 ) -> impl Parser<'src, &'src str, Coin, Err<'src>>
 {
@@ -6181,24 +6193,38 @@ pub fn perd<'src>(
     ))
 }
 
+//  Parses @if, @is, @f, @r or @q.
+//
 pub fn zust<'src>(
 ) -> impl Parser<'src, &'src str, Coin, Err<'src>>
 {
     choice((
-        ipv6_address().try_map(|s, span| {
+        ipv6_address()
+        .validate(|s, extra, emit| {
             let maybe_ipv6 = ipv6_to_atom(s.clone());
             match maybe_ipv6 {
                 None => {
-                    Err(Rich::custom(span, "invalid ipv6"))
+                    emit.emit(Rich::custom(
+                        extra.span(),
+                        "Invalid IPv6 Address",
+                    ));
+                    Coin::Dime("is".to_string(), ParsedAtom::Small(0))
                 },
-                Some(atom) => Ok(Coin::Dime("is".to_string(), atom)),
+                Some(atom) => Coin::Dime("is".to_string(), atom),
             }
         }),
-        ipv4_address().try_map(|s, span| {
+        ipv4_address()
+        .validate(|s, extra, emit| {
             let maybe_ipv4 = ipv4_to_atom(s);
             match maybe_ipv4 {
-                None => Err(Rich::custom(span, "invalid ipv4")),
-                Some(atom) => Ok(Coin::Dime("if".to_string(), atom)),
+                None => {
+                    emit.emit(Rich::custom(
+                        extra.span(),
+                        "invalid IPv4 address",
+                    ));
+                    return Coin::Dime("if".to_string(), ParsedAtom::Small(0));
+                },
+                Some(atom) => Coin::Dime("if".to_string(), atom),
             }
         }),
         float().map(|(p, q)| Coin::Dime(p, q)),
@@ -7198,13 +7224,15 @@ pub fn number<'src>(
                         ("ux".to_string(), hex_to_atom(s)));
 
     let uc_number = bitcoin_address()
-                    .try_map(|s, span| {
+                    .validate(|s, extra, emit| {
                         let maybe_base58 = base58_to_atom(s);
                         match maybe_base58 {
-                            None => Err(Rich::custom(span, "Invalid BTC address.")),
-                            Some(atom) => Ok(("uc".to_string(), atom))
-                        }
-                    });
+                            Some(a) => ("uc".to_string(), a),
+                            None => {
+                                emit.emit(Rich::custom(extra.span(), "Invalid Address."));
+                                ("uc".to_string(), (ParsedAtom::Small(0)))
+                            }
+                        }});
 
     let ub_number = binary_number()
                     .map(|s|
@@ -7229,13 +7257,15 @@ pub fn number<'src>(
                 hexadecimal_number().map(|s| ("sx".to_string(), hex_to_atom(s))),
                 binary_number().map(|s| ("sb".to_string(), binary_to_atom(s))),
                 bitcoin_address()
-                    .try_map(|s, span| {
-                        let maybe_base58 = base58_to_atom(s);
-                        match maybe_base58 {
-                            None => Err(Rich::custom(span, "Invalid BTC address.")),
-                            Some(atom) => Ok(("uc".to_string(), atom))
-                        }
-                    }),
+                        .validate(|s, extra, emit| {
+                                let maybe_base58 = base58_to_atom(s);
+                                match maybe_base58 {
+                                    Some(a) => ("uc".to_string(), a),
+                                    None => {
+                                        emit.emit(Rich::custom(extra.span(), "Invalid Address."));
+                                        ("sc".to_string(), (ParsedAtom::Small(0)))
+                                    }
+                                }}),
                 base32_number().map(|a| ("sv".to_string(), a)),
                 base64_number().map(|a| ("sw".to_string(), a)),
                 just("0i").ignore_then(digits())
@@ -7393,9 +7423,9 @@ pub fn absolute_date<'src>(
     })
 }
 
-fn unit_value_pair<'src>(
+fn relative_date_pair<'src>(
 )-> impl Parser<'src, &'src str, (char, u64), Err<'src>> {
-    one_of("dhms")
+    any().filter(|&c| c == 'd' || c == 'h' || c == 'm' || c == 's')
         .then(
             decimal_without_leading_zero()
             .try_map(|s, span| {
@@ -7406,7 +7436,7 @@ fn unit_value_pair<'src>(
 
 pub fn relative_date<'src>(
 ) -> impl Parser<'src, &'src str, ParsedAtom, Err<'src>> {
-    let time_part = unit_value_pair()
+    let time_part = relative_date_pair()
         .separated_by(just('.'))
         .at_least(1)
         .collect::<Vec<(char, u64)>>();
@@ -8226,12 +8256,17 @@ pub fn twid<'src>(
     choice((
         just('0')
             .ignore_then(base32())
-             .try_map(|s, span| {
-                    let atom = base32_to_atom(s);
-                    cue_simple(atom)
-                    .map(Coin::Blob)
-                    .map_err(|e| Rich::custom(span, format!("Failed to +cue: {}", e)))
-                }),
+            .validate(|s, extra, emit| {
+                let atom = base32_to_atom(s);
+                let cued = cue_simple(atom);
+                match cued {
+                    Ok(c) => Coin::Blob(c),
+                    Err(_e) => {
+                        emit.emit(Rich::custom(extra.span(), format!("Failed to cue.")));
+                        Coin::Blob(NounExpr::ParsedAtom(ParsedAtom::Small(0)))
+                    }
+                }
+             }),
         crub(),
     ))
 }

@@ -229,18 +229,25 @@ fn hoon_wide_parser<'src>(
             just('^').to(WideOp::Pair)))
         .then(hoon_wide.clone())
         .or_not())
-    .try_map(|(p, maybe_separator), span| {
+    .validate(|(p, maybe_separator), extra, emit| {
+            let span = extra.span();
             match maybe_separator  {
                 Some((WideOp::KetTis, q)) => {
                     let maybe_skin = flay(p);
                     match maybe_skin {
-                        None => Err(Rich::custom(span, "invalid p in p=q")),
-                        Some(s) => Ok(Hoon::KetTis(s, Box::new(q))),
+                        None => {
+                            emit.emit(Rich::custom(
+                                span,
+                                "invalid p in p=q",
+                            ));
+                            return Hoon::ZapZap;
+                        },
+                        Some(s) => Hoon::KetTis(s, Box::new(q)),
                     }
                 },
-                Some((WideOp::TisGal, q)) => Ok(Hoon::TisGal(Box::new(p), Box::new(q))),
-                Some((WideOp::Pair, q)) => Ok(Hoon::Pair(Box::new(p), Box::new(q))),
-                None => Ok(p),
+                Some((WideOp::TisGal, q)) => Hoon::TisGal(Box::new(p), Box::new(q)),
+                Some((WideOp::Pair, q)) => Hoon::Pair(Box::new(p), Box::new(q)),
+                None => p,
             }
         })
 }
@@ -586,45 +593,47 @@ fn run_parser(source_path: &PathBuf, jam: bool, dbug: bool, out: Option<PathBuf>
             let parsed_hoon = pile_to_noun(&mut slab, &pile);
             let took2 = start2.elapsed();
 
-            if jam {
-                slab.set_root(parsed_hoon);
-                let jammed = slab.jam();
+            if !source_path.is_dir() {
+                if jam {
+                    slab.set_root(parsed_hoon);
+                    let jammed = slab.jam();
 
-                match &out {
-                    Some(out) if out.is_dir() => {
-                        let out_file = out.join(
-                            source_path.file_name().unwrap()
-                        );
-                        fs::write(out_file, &jammed).unwrap();
+                    match &out {
+                        Some(out) if out.is_dir() => {
+                            let out_file = out.join(
+                                source_path.file_name().unwrap()
+                            );
+                            fs::write(out_file, &jammed).unwrap();
+                        }
+                        Some(out) => fs::write(out, &jammed).unwrap(),
+                        None => std::io::stdout().write_all(&jammed).unwrap(),
                     }
-                    Some(out) => fs::write(out, &jammed).unwrap(),
-                    None => std::io::stdout().write_all(&jammed).unwrap(),
-                }
-            } else {
-                let json = serde_json::to_string_pretty(&pile)
-                    .expect("AST JSON serialization failed");
+                } else {
+                    let json = serde_json::to_string_pretty(&pile)
+                        .expect("AST JSON serialization failed");
 
-                match &out {
-                    None => {
-                        println!("{json}");
-                    }
-                    Some(out) if out.is_dir() => {
-                        let mut out_file = out.join(
-                            source_path
-                                .file_name()
-                                .expect("input has no filename"),
-                        );
-                        out_file.set_extension("json");
-                        fs::write(&out_file, json).unwrap_or_else(|e| {
-                            eprintln!("Failed to write '{}': {}", out_file.display(), e);
-                            std::process::exit(1);
-                        });
-                    }
-                    Some(out) => {
-                        fs::write(out, json).unwrap_or_else(|e| {
-                            eprintln!("Failed to write '{}': {}", out.display(), e);
-                            std::process::exit(1);
-                        });
+                    match &out {
+                        None => {
+                            println!("{json}");
+                        }
+                        Some(out) if out.is_dir() => {
+                            let mut out_file = out.join(
+                                source_path
+                                    .file_name()
+                                    .expect("input has no filename"),
+                            );
+                            out_file.set_extension("json");
+                            fs::write(&out_file, json).unwrap_or_else(|e| {
+                                eprintln!("Failed to write '{}': {}", out_file.display(), e);
+                                std::process::exit(1);
+                            });
+                        }
+                        Some(out) => {
+                            fs::write(out, json).unwrap_or_else(|e| {
+                                eprintln!("Failed to write '{}': {}", out.display(), e);
+                                std::process::exit(1);
+                            });
+                        }
                     }
                 }
             }

@@ -199,7 +199,7 @@ impl BinaryFloat {
         match self {
             BinaryFloat::Finite { sign, .. } => *sign,
             BinaryFloat::Infinity { sign } => *sign,
-            BinaryFloat::NaN => false, // irrelevant
+            BinaryFloat::NaN => false,
         }
     }
 }
