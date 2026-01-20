@@ -10,13 +10,18 @@ use std::time::Instant;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::collections::HashMap;
 use bytes::Bytes;
 use nockapp::noun::slab::NounSlab;
 use nockvm::noun::{D, T};
 use parser::ast::hoon::*;
 use parser::utils::*;
 use parser::runes::*;
-
+use notify::{EventKind, RecursiveMode, Watcher};
+use notify::recommended_watcher;
+use notify::event::ModifyKind;
+use std::sync::mpsc::channel;
+use std::time::Duration;
 macro_rules! rune_branch_pair {
     ($token:expr, $tall:expr, $wide:expr) => {
         just($token)
@@ -491,6 +496,10 @@ struct Cli {
     #[arg(value_name = "PATH", required = false)]
     input: Option<PathBuf>,
 
+    /// watch directory and re-run parser on changes
+    #[arg(long)]
+    watch: bool,
+
     /// disable debug traces
     #[arg(long = "no-dbug", short = 'b')]
     no_dbug: bool,
@@ -677,18 +686,85 @@ fn main() {
         return;
     }
 
-    let start = Instant::now();
-
     let input = cli.input.clone().unwrap_or_else(|| {
         eprintln!("Input file or directory is required unless --test");
         std::process::exit(2);
     });
 
-    let inputs = collect_inputs(&input);
+    if cli.watch {
+        watch_and_parse(input, cli.jam, !cli.no_dbug, cli.out);
+        return;
+    }
 
+    let start = Instant::now();
+
+    let inputs = collect_inputs(&input);
     for source_path in inputs {
         run_parser(&source_path, cli.jam, !cli.no_dbug, cli.out.clone());
     }
 
     println!("total running time {:?} ", start.elapsed());
+}
+
+fn watch_and_parse(
+    root: PathBuf,
+    jam: bool,
+    dbug: bool,
+    out: Option<PathBuf>,
+) {
+    let (tx, rx) = channel();
+
+    let mut watcher = recommended_watcher(tx).expect("failed to create file watcher");
+
+    watcher
+        .watch(&root, RecursiveMode::Recursive)
+        .expect("failed to watch path");
+
+    eprintln!("watching {}", root.display());
+
+    let mut last_parsed: HashMap<PathBuf, Instant> = HashMap::new();
+    let debounce = Duration::from_millis(500);
+
+    loop {
+        match rx.recv() {
+            Ok(Ok(event)) => {
+                if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
+                    continue;
+                }
+
+                for path in event.paths {
+                    if path.extension().and_then(|e| e.to_str()) != Some("hoon") {
+                        continue;
+                    }
+
+                    let now = Instant::now();
+
+                    if let Some(prev) = last_parsed.get(&path) {
+                        if now.duration_since(*prev) < debounce {
+                            continue;
+                        }
+                    }
+
+                    if !path.is_file() {
+                        continue;
+                    }
+
+                    let Ok(meta) = fs::metadata(&path) else { continue };
+                    if meta.len() == 0 {
+                        continue;
+                    }
+
+                    run_parser(&path, jam, dbug, out.clone());
+
+                    last_parsed.insert(path.clone(), now);
+                }
+            }
+
+            Ok(Err(err)) => eprintln!("watch error: {err}"),
+            Err(err) => {
+                eprintln!("watch channel closed: {err}");
+                break;
+            }
+        }
+    }
 }
