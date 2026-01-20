@@ -15,9 +15,9 @@ The binary will be available at:
 ```bash
 ../../target/release/parser file_to_parse.hoon --out out.json
 ```
-## Parse Directory:
+## Watch Directory:
 ```bash
-../../target/release/parser /mydir --out out.json
+../../target/release/parser /mydir --watch --out out.json
 ```
 ## Print to stdout (if --out is omitted)
 ```bash
