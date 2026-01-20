@@ -1,5 +1,7 @@
 use crate::ast::hoon::*;
 use crate::utils::*;
+use crate::atom::*;
+
 use chumsky::{
     prelude::*,
 };

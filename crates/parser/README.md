@@ -9,7 +9,7 @@ The binary will be available at:
 
 **../../target/release/parse**
 
-## Basic usage
+## Usage
 
 ## Parse a Hoon file to Json:
 ```bash
@@ -27,7 +27,4 @@ The binary will be available at:
 ```
 ../../target/release/parser --no-dbug file_to_parse.hoon
 ```
-## Run tests
-```
-../../target/release/parser --test
 ```

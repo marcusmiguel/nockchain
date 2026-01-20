@@ -17,11 +17,16 @@ use nockvm::noun::{D, T};
 use parser::ast::hoon::*;
 use parser::utils::*;
 use parser::runes::*;
+use parser::atom::*;
+use parser::skin_formation::*;
+use parser::noun::*;
+
 use notify::{EventKind, RecursiveMode, Watcher};
 use notify::recommended_watcher;
 use notify::event::ModifyKind;
 use std::sync::mpsc::channel;
 use std::time::Duration;
+
 macro_rules! rune_branch_pair {
     ($token:expr, $tall:expr, $wide:expr) => {
         just($token)
@@ -257,7 +262,7 @@ fn hoon_wide_parser<'src>(
         })
 }
 
-pub fn hoon_parser<'src>(
+pub fn hoon_tall_parser<'src>(
     hoon: impl ParserExt<'src, Hoon>,
     hoon_wide: impl ParserExt<'src, Hoon>,
     spec: impl ParserExt<'src, Spec>,
@@ -351,11 +356,31 @@ pub fn hoon_parser<'src>(
     choice(parsers)
 }
 
-pub fn parser<'src>(
+// Parses Imports + Hoon
+//
+pub fn pile_parser<'src>(
     wer: Path,
     bug: bool,
     linemap: Arc<LineMap>,
 ) -> impl Parser<'src, &'src str, Pile, Err<'src>> {
+
+    parse_imports()
+    .then(hoon_parser(wer, bug, linemap))
+    .map(|(mut pile, body)| {
+        pile.hoon = body;
+        pile
+    })
+    .boxed()
+
+}
+
+// Parses Hoon without Imports
+//
+pub fn hoon_parser<'src>(
+    wer: Path,
+    bug: bool,
+    linemap: Arc<LineMap>,
+) -> impl Parser<'src, &'src str, Hoon, Err<'src>> {
 
     let mut hoon                = Recursive::declare();
     let mut hoon_wide           = Recursive::declare();
@@ -403,7 +428,7 @@ pub fn parser<'src>(
     hoon_wide.define(hoon_wide_body);
 
     let hoon_body =
-            hoon_parser(hoon.clone(),
+            hoon_tall_parser(hoon.clone(),
                         hoon_wide.clone(),
                         spec.clone(),
                         spec_wide.clone(),
@@ -418,7 +443,7 @@ pub fn parser<'src>(
     hoon.define(hoon_body);
 
     let hoon_no_trace_body =
-            hoon_parser(hoon_no_trace.clone(),
+            hoon_tall_parser(hoon_no_trace.clone(),
                         hoon_wide_no_trace.clone(),
                         spec_no_trace.clone(),
                         spec_wide_no_trace.clone(),
@@ -466,29 +491,17 @@ pub fn parser<'src>(
 
     let hoon = if bug { hoon } else { hoon_no_trace };
 
-    let file_body =
-        hoon
-        .separated_by(gap())
-        .at_least(1)
-        .collect::<Vec<Hoon>>()
-        .map(|hoons| Hoon::TisSig(hoons))
-        .delimited_by(gap().or_not(), gap()
-                                      .or_not()
-                                      .ignore_then(version_pin().or_not()));
-
-    parse_imports()
-    .then(file_body)
-    .map(|(mut pile, body)| {
-        pile.hoon = body;
-        pile
-    })
-    .boxed()
+    hoon
+    .separated_by(gap())
+    .at_least(1)
+    .collect::<Vec<Hoon>>()
+    .map(|hoons| Hoon::TisSig(hoons))
+    .delimited_by(gap().or_not(),
+                  gap()
+                  .or_not()
+                  .ignore_then(version_pin().or_not()))
+                  .boxed()
 }
-
-pub static HOON138JAM: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/test/parsed-hoon138.jam"
-));
 
 #[derive(ClapParser, Debug)]
 struct Cli {
@@ -504,77 +517,16 @@ struct Cli {
     #[arg(long = "no-dbug", short = 'b')]
     no_dbug: bool,
 
-    /// write JAM instead of JSON
-    #[arg(long = "jam")]
-    jam: bool,
+    /// skip imports
+    #[arg(long = "no-imports")]
+    no_imports: bool,
 
     /// output file (defaults to stdout)
     #[arg(long = "out", short = 'o', value_name = "PATH")]
     out: Option<PathBuf>,
-
-    /// run hardcoded hoon-138 test
-    #[arg(long = "test")]
-    test: bool,
 }
 
-fn run_test() {
-    let source_path = PathBuf::from("../hoonc/hoon/hoon-138.hoon");
-
-    let source = fs::read_to_string(&source_path).unwrap();
-    let linemap = Arc::new(LineMap::new(&source));
-
-    let wer = vec![
-        "hoonc".to_string(),
-        "hoon".to_string(),
-        "hoon-138".to_string(),
-        "hoon".to_string(),
-    ];
-
-    let start = Instant::now();
-
-    match parser(wer, false, linemap)
-        .parse(source.as_str())
-        .into_result()
-    {
-        Ok(pile) => {
-            let end = start.elapsed();
-
-            let mut slab = NounSlab::new();
-
-            let jammed = Bytes::from(HOON138JAM);
-            let cued = slab.cue_into(jammed).unwrap();
-
-            let expected_parsed_hoon = T(&mut slab, &[D(0), D(0), D(0), D(0), D(0), cued]);
-            let actual_parsed_hoon = pile_to_noun(&mut slab, &pile);
-
-            diff_and_report(&expected_parsed_hoon, &actual_parsed_hoon);
-
-            println!("test parsing took: {:?}", end);
-        }
-        Err(errs) => {
-             for err in errs {
-                let span = err.span().into_range();
-                let file_id = source_path.to_string_lossy().to_string();
-
-                Report::build(ReportKind::Error, (file_id.clone(), span.clone()))
-                    .with_config(
-                        ariadne::Config::new()
-                            .with_index_type(ariadne::IndexType::Byte),
-                    )
-                    .with_label(
-                        Label::new((file_id.clone(), span))
-                            .with_message(err.reason().to_string())
-                            .with_color(Color::Red),
-                    )
-                    .finish()
-                    .eprint((file_id.clone(), Source::from(source.clone())))
-                    .unwrap();
-            }
-        }
-    };
-}
-
-fn run_parser(source_path: &PathBuf, jam: bool, dbug: bool, out: Option<PathBuf>) {
+fn run_parser_no_imports(source_path: &PathBuf, dbug: bool, out: Option<PathBuf>) {
 
     let source = fs::read_to_string(source_path).unwrap_or_else(|err| {
         eprintln!("Error reading file '{}': {}", source_path.display(), err);
@@ -590,65 +542,50 @@ fn run_parser(source_path: &PathBuf, jam: bool, dbug: bool, out: Option<PathBuf>
 
     let linemap = Arc::new(LineMap::new(&source));
 
-    match parser(wer, dbug, linemap)
-        .parse(source.as_str())
-        .into_result()
+    match hoon_parser(wer, dbug, linemap)
+         .parse(source.as_str())
+         .into_result()
     {
-        Ok(pile) => {
+
+        Ok(res) => {
             let took = start.elapsed();
 
             let mut slab = NounSlab::new();
             let start2 = Instant::now();
-            let parsed_hoon = pile_to_noun(&mut slab, &pile);
+            let _parsed_hoon = hoon_to_noun(&mut slab, &res);
             let took2 = start2.elapsed();
 
             if !source_path.is_dir() {
-                if jam {
-                    slab.set_root(parsed_hoon);
-                    let jammed = slab.jam();
+                let json = serde_json::to_string_pretty(&res)
+                    .expect("AST JSON serialization failed");
 
-                    match &out {
-                        Some(out) if out.is_dir() => {
-                            let out_file = out.join(
-                                source_path.file_name().unwrap()
-                            );
-                            fs::write(out_file, &jammed).unwrap();
-                        }
-                        Some(out) => fs::write(out, &jammed).unwrap(),
-                        None => std::io::stdout().write_all(&jammed).unwrap(),
+                match &out {
+                    None => {
+                        println!("{json}");
                     }
-                } else {
-                    let json = serde_json::to_string_pretty(&pile)
-                        .expect("AST JSON serialization failed");
-
-                    match &out {
-                        None => {
-                            println!("{json}");
-                        }
-                        Some(out) if out.is_dir() => {
-                            let mut out_file = out.join(
-                                source_path
-                                    .file_name()
-                                    .expect("input has no filename"),
-                            );
-                            out_file.set_extension("json");
-                            fs::write(&out_file, json).unwrap_or_else(|e| {
-                                eprintln!("Failed to write '{}': {}", out_file.display(), e);
-                                std::process::exit(1);
-                            });
-                        }
-                        Some(out) => {
-                            fs::write(out, json).unwrap_or_else(|e| {
-                                eprintln!("Failed to write '{}': {}", out.display(), e);
-                                std::process::exit(1);
-                            });
-                        }
+                    Some(out) if out.is_dir() => {
+                        let mut out_file = out.join(
+                            source_path
+                                .file_name()
+                                .expect("input has no filename"),
+                        );
+                        out_file.set_extension("json");
+                        fs::write(&out_file, json).unwrap_or_else(|e| {
+                            eprintln!("Failed to write '{}': {}", out_file.display(), e);
+                            std::process::exit(1);
+                        });
+                    }
+                    Some(out) => {
+                        fs::write(out, json).unwrap_or_else(|e| {
+                            eprintln!("Failed to write '{}': {}", out.display(), e);
+                            std::process::exit(1);
+                        });
                     }
                 }
             }
 
             println!(
-                "parsed file {}, took {:?}, noun creation time {:?}",
+                "parsed file {}, took {:?}, ast to noun took: {:?}",
                 source_path.display(),
                 took,
                 took2
@@ -678,37 +615,97 @@ fn run_parser(source_path: &PathBuf, jam: bool, dbug: bool, out: Option<PathBuf>
     };
 }
 
-fn main() {
-    let cli = Cli::parse();
+fn run_parser(source_path: &PathBuf, dbug: bool, out: Option<PathBuf>) {
 
-    if cli.test {
-        run_test();
-        return;
-    }
-
-    let input = cli.input.clone().unwrap_or_else(|| {
-        eprintln!("Input file or directory is required unless --test");
-        std::process::exit(2);
+    let source = fs::read_to_string(source_path).unwrap_or_else(|err| {
+        eprintln!("Error reading file '{}': {}", source_path.display(), err);
+        std::process::exit(1);
     });
-
-    if cli.watch {
-        watch_and_parse(input, cli.jam, !cli.no_dbug, cli.out);
-        return;
-    }
 
     let start = Instant::now();
 
-    let inputs = collect_inputs(&input);
-    for source_path in inputs {
-        run_parser(&source_path, cli.jam, !cli.no_dbug, cli.out.clone());
-    }
+    let wer: Vec<String> = source_path
+        .iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
 
-    println!("total running time {:?} ", start.elapsed());
+    let linemap = Arc::new(LineMap::new(&source));
+
+    match pile_parser(wer, dbug, linemap)
+            .parse(source.as_str())
+            .into_result() {
+
+        Ok(res) => {
+            let took = start.elapsed();
+
+            let mut slab = NounSlab::new();
+            let start2 = Instant::now();
+            let parsed_hoon = pile_to_noun(&mut slab, &res);
+            let took2 = start2.elapsed();
+
+            if !source_path.is_dir() {
+                let json = serde_json::to_string_pretty(&res)
+                    .expect("AST JSON serialization failed");
+
+                match &out {
+                    None => {
+                        println!("{json}");
+                    }
+                    Some(out) if out.is_dir() => {
+                        let mut out_file = out.join(
+                            source_path
+                                .file_name()
+                                .expect("input has no filename"),
+                        );
+                        out_file.set_extension("json");
+                        fs::write(&out_file, json).unwrap_or_else(|e| {
+                            eprintln!("Failed to write '{}': {}", out_file.display(), e);
+                            std::process::exit(1);
+                        });
+                    }
+                    Some(out) => {
+                        fs::write(out, json).unwrap_or_else(|e| {
+                            eprintln!("Failed to write '{}': {}", out.display(), e);
+                            std::process::exit(1);
+                        });
+                    }
+                }
+            }
+
+            println!(
+                "parsed file {}, took {:?}, ast to noun took: {:?}",
+                source_path.display(),
+                took,
+                took2
+            );
+        }
+
+        Err(errs) => {
+            for err in errs {
+                let span = err.span().into_range();
+                let file_id = source_path.to_string_lossy().to_string();
+
+                Report::build(ReportKind::Error, (file_id.clone(), span.clone()))
+                    .with_config(
+                        ariadne::Config::new()
+                            .with_index_type(ariadne::IndexType::Byte),
+                    )
+                    .with_label(
+                        Label::new((file_id.clone(), span))
+                            .with_message(err.reason().to_string())
+                            .with_color(Color::Red),
+                    )
+                    .finish()
+                    .eprint((file_id.clone(), Source::from(source.clone())))
+                    .unwrap();
+            }
+        }
+    };
 }
 
 fn watch_and_parse(
     root: PathBuf,
-    jam: bool,
+    no_imports: bool,
     dbug: bool,
     out: Option<PathBuf>,
 ) {
@@ -754,7 +751,11 @@ fn watch_and_parse(
                         continue;
                     }
 
-                    run_parser(&path, jam, dbug, out.clone());
+                    if no_imports {
+                        run_parser_no_imports(&path, dbug, out.clone());
+                    } else {
+                        run_parser(&path, dbug, out.clone());
+                    }
 
                     last_parsed.insert(path.clone(), now);
                 }
@@ -767,4 +768,32 @@ fn watch_and_parse(
             }
         }
     }
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    let input = cli.input.clone().unwrap_or_else(|| {
+        eprintln!("Input file or directory is required");
+        std::process::exit(2);
+    });
+
+    if cli.watch {
+        watch_and_parse(input, cli.no_imports, !cli.no_dbug, cli.out);
+        return;
+    }
+
+    let start = Instant::now();
+
+    let inputs = collect_inputs(&input);
+
+    for source_path in inputs {
+        if cli.no_imports {
+            run_parser_no_imports(&source_path, cli.no_dbug, cli.out.clone());
+        } else {
+            run_parser(&source_path, cli.no_dbug, cli.out.clone());
+        }
+    }
+
+    println!("total running time {:?} ", start.elapsed());
 }
