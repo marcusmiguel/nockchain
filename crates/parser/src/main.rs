@@ -20,6 +20,7 @@ use parser::runes::*;
 use parser::atom::*;
 use parser::skin_formation::*;
 use parser::noun::*;
+use parser::sail::{sail_tall_parser as sail_tall, sail_wide_parser as sail_wide};
 
 use notify::{EventKind, RecursiveMode, Watcher};
 use notify::recommended_watcher;
@@ -43,7 +44,7 @@ macro_rules! rune_branch {
     };
 }
 
-fn spec_parser<'src>(
+pub fn spec_parser<'src>(
     hoon:        impl ParserExt<'src, Hoon>,
     hoon_wide:        impl ParserExt<'src, Hoon>,
     spec:        impl ParserExt<'src, Spec>,
@@ -67,7 +68,7 @@ fn spec_parser<'src>(
     .boxed()
 }
 
-fn spec_wide_parser<'src>(
+pub fn spec_wide_parser<'src>(
     spec_wide:   impl ParserExt<'src, Spec>,
     hoon_wide:   impl ParserExt<'src, Hoon>,
     linemap: Arc<LineMap>,
@@ -113,7 +114,7 @@ enum WideOp {
     Pair,
 }
 
-fn hoon_wide_parser<'src>(
+pub fn hoon_wide_parser<'src>(
     hoon:        impl ParserExt<'src, Hoon>,
     hoon_wide:   impl ParserExt<'src, Hoon>,
     spec_wide:   impl ParserExt<'src, Spec>,
@@ -185,10 +186,13 @@ fn hoon_wide_parser<'src>(
                             hoon_wide_no_trace.clone())
         ),
 
-        rune_branch!(
-            ';',
-            mic_runes_wide(hoon_wide.clone(), spec_wide.clone())
-        ),
+        just(';')
+        .ignore_then(
+            choice((
+                mic_runes_wide(hoon_wide.clone(), spec_wide.clone()),
+                sail_wide(hoon.clone(), hoon_wide.clone(), linemap.clone())
+            ))
+        ).boxed(),
 
         just('.').ignore_then(
             choice((
@@ -271,6 +275,7 @@ pub fn hoon_tall_parser<'src>(
     hoon_no_trace: impl ParserExt<'src, Hoon>,
     hoon_wide_with_trace: impl ParserExt<'src, Hoon>,
     hoon_wide_no_trace: impl ParserExt<'src, Hoon>,
+    linemap: Arc<LineMap>,
 ) -> impl Parser<'src, &'src str, Hoon, Err<'src>>
 {
     let parsers = vec![
@@ -336,11 +341,13 @@ pub fn hoon_tall_parser<'src>(
                                 hoon_wide_no_trace.clone())
             ),
 
-            rune_branch_pair!(
-                ';',
-                mic_runes_tall(hoon.clone(), spec.clone()),
-                mic_runes_wide(hoon_wide.clone(), spec_wide.clone())
-            ),
+            just(';')
+            .ignore_then(
+                choice((mic_runes_tall(hoon.clone(), spec.clone()),
+                        mic_runes_wide(hoon_wide.clone(), spec_wide.clone()),
+                        sail_tall(hoon.clone(), hoon_wide.clone(), linemap)
+                ))
+            ).boxed(),
 
             rune_branch_pair!(
                 '.',
@@ -435,7 +442,8 @@ pub fn hoon_parser<'src>(
                         hoon.clone(),
                         hoon_no_trace.clone(),
                         hoon_wide.clone(),
-                        hoon_wide_no_trace.clone())
+                        hoon_wide_no_trace.clone(),
+                        linemap.clone())
                         .map_with(wrap_hoon_with_trace(wer.clone(), linemap.clone()))
                         .labelled("Hoon")
                         .boxed();
@@ -450,7 +458,8 @@ pub fn hoon_parser<'src>(
                         hoon.clone(),
                         hoon_no_trace.clone(),
                         hoon_wide.clone(),
-                        hoon_wide_no_trace.clone())
+                        hoon_wide_no_trace.clone(),
+                        linemap.clone())
                         .labelled("Hoon")
                         .boxed();
 
@@ -640,7 +649,7 @@ fn run_parser(source_path: &PathBuf, dbug: bool, out: Option<PathBuf>) {
 
             let mut slab = NounSlab::new();
             let start2 = Instant::now();
-            let parsed_hoon = pile_to_noun(&mut slab, &res);
+            let _parsed_hoon = pile_to_noun(&mut slab, &res);
             let took2 = start2.elapsed();
 
             if !source_path.is_dir() {

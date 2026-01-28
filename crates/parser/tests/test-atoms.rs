@@ -580,3 +580,75 @@ fn test_empty_cord() {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
     }
 }
+
+// @t
+#[test]
+fn test_multiline_cord() {
+    let mut slab: NounSlab<NockJammer> = NounSlab::new();
+
+    let multiline_cord =
+         "'''\n\
+          line one\n\
+          line two\n\
+          \"quotes\" are fine\n\
+          '''";
+
+    let res = native_hoon_parser(vec![], false, Arc::new(LineMap::new(&"")))
+        .parse(multiline_cord)
+        .into_result()
+        .unwrap();
+
+    let mut actual_noun = hoon_to_noun(&mut slab, &res);
+
+    let num_str = "769716495981374736384378692615420590\
+                    711998177018090080796281768113304337845844863340";
+    let ubig = UBig::from_str_radix(num_str, 10).unwrap();
+    let big_atom = Atom::from_ubig(&mut slab, &ubig).as_noun();
+
+    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"t")), big_atom]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+
+    unsafe {
+        assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
+    }
+}
+
+// @sb
+#[test]
+fn test_double_signed_decimal_number() {
+    let mut slab: NounSlab<NockJammer> = NounSlab::new();
+
+    let res = native_hoon_parser(vec![], false, Arc::new(LineMap::new(&"")))
+        .parse("--123.100")
+        .into_result()
+        .unwrap();
+
+    let mut actual_noun = hoon_to_noun(&mut slab, &res);
+
+    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"sd")), D(246200)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+
+    unsafe {
+        assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
+    }
+}
+
+// @sb
+#[test]
+fn test_signed_binary_number() {
+    let mut slab: NounSlab<NockJammer> = NounSlab::new();
+
+    let res = native_hoon_parser(vec![], false, Arc::new(LineMap::new(&"")))
+        .parse("-0b11.1000")
+        .into_result()
+        .unwrap();
+
+    let mut actual_noun = hoon_to_noun(&mut slab, &res);
+
+    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"sb")), D(111)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+
+    unsafe {
+        assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
+    }
+}

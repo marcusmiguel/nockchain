@@ -830,6 +830,23 @@ where
     }
 }
 
+fn opt_to_noun_with_slab<T, F>(
+    slab: &mut NounSlab,
+    opt: &Option<T>,
+    f: F,
+) -> Noun
+where
+    F: FnOnce(&mut NounSlab, &T) -> Noun,
+{
+    match opt {
+        None => D(0),
+        Some(x) => {
+            let x_noun = f(slab, x);
+            T(slab, &[D(0), x_noun])
+        }
+    }
+}
+
 fn basetype_to_noun(slab: &mut NounSlab, bt: &BaseType) -> Noun {
     match bt {
         BaseType::NounExpr => D(tas!(b"noun")),
@@ -1535,7 +1552,7 @@ fn mart_to_noun(slab: &mut NounSlab, mart: &Mart) -> Noun {
 
 fn beer_to_noun(slab: &mut NounSlab, beer: &Beer) -> Noun {
     match beer {
-        Beer::Char(cord) => cord_to_noun(slab, cord),
+        Beer::Char(cord) => atom_to_noun(slab, cord),
         Beer::Hoon(h) => {
             let hoon_noun = hoon_to_noun(slab, h);
             T(slab, &[D(0), hoon_noun])
@@ -1557,27 +1574,19 @@ fn tuna_to_noun(slab: &mut NounSlab, tuna: &Tuna) -> Noun {
         Tuna::Manx(m) => {
             manx_to_noun(slab, m)
         }
-        Tuna::TunaTail(tail) => {
-            tuna_tail_to_noun(slab, tail)
-        }
-    }
-}
-
-fn tuna_tail_to_noun(slab: &mut NounSlab, tail: &TunaTail) -> Noun {
-    match tail {
-        TunaTail::Tape(h) => {
+        Tuna::Tape(h) => {
             let h_noun = hoon_to_noun(slab, h);
             T(slab, &[D(tas!(b"tape")), h_noun])
         }
-        TunaTail::Manx(h) => {
+        Tuna::ManxHoon(h) => {
             let h_noun = hoon_to_noun(slab, h);
             T(slab, &[D(tas!(b"manx")), h_noun])
         }
-        TunaTail::Marl(h) => {
+        Tuna::Marl(h) => {
             let h_noun = hoon_to_noun(slab, h);
             T(slab, &[D(tas!(b"marl")), h_noun])
         }
-        TunaTail::Call(h) => {
+        Tuna::Call(h) => {
             let h_noun = hoon_to_noun(slab, h);
             T(slab, &[D(tas!(b"call")), h_noun])
         }
@@ -1660,7 +1669,7 @@ pub fn pile_to_noun(slab: &mut NounSlab, pile: &Pile) -> Noun {
     let sur_noun = {
         let mut items = Vec::new();
         for (opt_term, term) in pile.sur.clone() {
-            let opt_noun = opt_term.map_or_else(|| D(0u64), |t| term_to_noun(slab, &t));
+            let opt_noun = opt_to_noun_with_slab(slab, &opt_term, |slab, x| term_to_noun(slab, x));
             let term_noun = term_to_noun(slab, &term);
             items.push(T(slab, &[opt_noun, term_noun]));
         }
@@ -1670,7 +1679,7 @@ pub fn pile_to_noun(slab: &mut NounSlab, pile: &Pile) -> Noun {
     let lib_noun = {
         let mut items = Vec::new();
         for (opt_term, term) in pile.lib.clone() {
-            let opt_noun = opt_term.map_or_else(|| D(0u64), |t| term_to_noun(slab, &t));
+            let opt_noun = opt_to_noun_with_slab(slab, &opt_term, |slab, x| term_to_noun(slab, x));
             let term_noun = term_to_noun(slab, &term);
             items.push(T(slab, &[opt_noun, term_noun]));
         }
@@ -1680,7 +1689,7 @@ pub fn pile_to_noun(slab: &mut NounSlab, pile: &Pile) -> Noun {
     let raw_noun = {
         let mut items = Vec::new();
         for (opt_term, path) in pile.raw.clone() {
-            let opt_noun = opt_term.map_or_else(|| D(0u64), |t| term_to_noun(slab, &t));
+            let opt_noun = opt_to_noun_with_slab(slab, &opt_term, |slab, x| term_to_noun(slab, x));
             let path_noun = path_to_noun(slab, &path);
             items.push(T(slab, &[opt_noun, path_noun]));
         }
@@ -1701,7 +1710,7 @@ pub fn pile_to_noun(slab: &mut NounSlab, pile: &Pile) -> Noun {
     let hax_noun = {
         let mut items = Vec::new();
         for (opt_term, term) in pile.hax.clone() {
-            let opt_noun = opt_term.map_or_else(|| D(0u64), |t| term_to_noun(slab, &t));
+            let opt_noun = opt_to_noun_with_slab(slab, &opt_term, |slab, x| term_to_noun(slab, x));
             let term_noun = term_to_noun(slab, &term);
             items.push(T(slab, &[opt_noun, term_noun]));
         }

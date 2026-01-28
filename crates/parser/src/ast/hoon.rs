@@ -236,7 +236,7 @@ pub type Block = Vec<Path>;
 
 #[derive(serde::Serialize, PartialEq, Debug, Clone)]
 pub enum Beer {
-    Char(Cord),
+    Char(ParsedAtom),
     Hoon(Hoon),
 }
 
@@ -283,13 +283,8 @@ pub enum Maru {
 #[derive(serde::Serialize, PartialEq, Debug, Clone)]
 pub enum Tuna {
     Manx(Manx),
-    TunaTail(TunaTail),
-}
-
-#[derive(serde::Serialize, PartialEq, Debug, Clone)]
-pub enum TunaTail {
     Tape(Hoon),
-    Manx(Hoon),
+    ManxHoon(Hoon),
     Marl(Hoon),
     Call(Hoon),
 }

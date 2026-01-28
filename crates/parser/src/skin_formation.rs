@@ -2,12 +2,13 @@ use parser::ast::hoon::*;
 use std::collections::HashMap;
 use crate::atom::*;
 use crate::utils::*;
+
 //
-//  Hoon Compiler Auxiliary
+//  Skin Formation Logic
 //
-//  The entry is +flay which is called to convert Skin -> Hoon
-//  flay is called by ^=
-//  flay depends on many other auxiliary functions
+//  The entry is +flay which is called to convert Hoon -> Skin
+//  flay is called by ^=, it depends on many other
+//  functions from the Hoon compiler
 //
 
 pub fn flay(gen: Hoon) -> Option<Skin> {
@@ -1403,11 +1404,11 @@ pub fn open(gen: Hoon) -> Hoon {
                         Tuna::Manx(m) => {
                             Hoon::Pair(Box::new(Hoon::Xray(m.clone())), Box::new(loop_marl(tail.to_vec())))
                         },
-                        Tuna::TunaTail(TunaTail::Manx(m)) => Hoon::Pair(Box::new(m.clone()), Box::new(loop_marl(tail.to_vec()))),
-                        Tuna::TunaTail(TunaTail::Tape(t)) => Hoon::Pair(Box::new(Hoon::MicFas(Box::new(t.clone()))),
+                        Tuna::ManxHoon(m) => Hoon::Pair(Box::new(m.clone()), Box::new(loop_marl(tail.to_vec()))),
+                        Tuna::Tape(t) => Hoon::Pair(Box::new(Hoon::MicFas(Box::new(t.clone()))),
                                                         Box::new(loop_marl(tail.to_vec()))),
-                        Tuna::TunaTail(TunaTail::Call(h)) => Hoon::CenCol(Box::new(h.clone()), vec![loop_marl(tail.to_vec())]),
-                        Tuna::TunaTail(TunaTail::Marl(sub)) => {
+                        Tuna::Call(h) => Hoon::CenCol(Box::new(h.clone()), vec![loop_marl(tail.to_vec())]),
+                        Tuna::Marl(sub) => {
                             let tsbr = Box::new(Hoon::TisBar(
                                 Box::new(Spec::Base(BaseType::Cell)),
                                 Box::new(Hoon::BarPat(None, {
@@ -1767,7 +1768,7 @@ pub fn open(gen: Hoon) -> Hoon {
                 let woofs: Vec<Woof> = beers
                     .iter()
                     .map(|b| match b {
-                        Beer::Char(cord) => Woof::ParsedAtom(string_to_atom(cord.clone())),
+                        Beer::Char(cord) => Woof::ParsedAtom(cord.clone()),
                         Beer::Hoon(hoon) => Woof::Hoon(hoon.clone()),
                     })
                     .collect();

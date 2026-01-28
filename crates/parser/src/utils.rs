@@ -1,8 +1,6 @@
 use crate::ast::hoon::*;
-use nockvm::noun::{D, T, YES, NO, Noun, Atom, DIRECT_MAX, DirectAtom};
+use nockvm::noun::{D, Noun};
 use nockvm_macros::tas;
-use nockvm::jets::util::slot;
-use nockapp::AtomExt;
 use nockapp::noun::slab::{slab_mug, slab_noun_equality};
 use either::Either::{Left, Right};
 use std::cmp;
@@ -37,7 +35,7 @@ where
 }
 
 // non-control ASCII (32-255, excluding 127/DEL)
-fn non_control_char<'src>(
+pub fn non_control_char<'src>(
 ) -> impl Parser<'src, &'src str, char, Err<'src>> {
     any().filter(|c: &char| {
         let code = *c as u32;
@@ -554,17 +552,37 @@ pub fn newline<'src>(
     just('\n').labelled("Newline").ignored()
 }
 
+pub fn sump<'src>(
+    hoon_wide:   impl ParserExt<'src, Hoon>,
+) -> impl Parser<'src, &'src str, Hoon, Err<'src>>
+{
+    hoon_wide
+    .separated_by(just(' '))
+    .at_least(1)
+    .collect::<Vec<_>>()
+    .delimited_by(just('{'), just('}'))
+    .map(|h| Hoon::ColTar(h))
+    .labelled("{Hoon}")
+}
+
+pub fn woof_to_beer(woof: Woof) -> Beer {
+    match woof {
+        Woof::ParsedAtom(atom) => Beer::Char(atom),
+        Woof::Hoon(hoon) => Beer::Hoon(hoon),
+    }
+}
+
+pub fn woofs_to_beers(woofs: Vec<Woof>) -> Vec<Beer> {
+    woofs.into_iter().map(woof_to_beer).collect()
+}
+
 pub fn soil<'src>(
     hoon_wide:   impl ParserExt<'src, Hoon>,
     linemap: Arc<LineMap>,
 ) -> impl Parser<'src, &'src str, Vec<Woof>, Err<'src>>
 {
-    let sump = hoon_wide
-                .separated_by(just(' '))
-                .at_least(1)
-                .collect::<Vec<_>>()
-                .delimited_by(just('{'), just('}'))
-                .map(|h| Woof::Hoon(Hoon::ColTar(h))).boxed();
+    let sump = sump(hoon_wide.clone())
+                .map(|h| Woof::Hoon(h)).boxed();
 
      // non-control 32-256, excluding DEL, {,  ", \
     let wide_char = any().filter(|c: &char| {
@@ -616,11 +634,6 @@ pub fn soil<'src>(
         (x >= 0x20 && x <= 0x7E && *c != '{' && *c != '\\')
             || (x >= 0x80 && x <= 0xFF)
     });
-
-    // let tall_tape_line_break =
-    //             newline()
-    //             .ignore_then(just("\"\"\"").not())
-    //             .to(Woof::ParsedAtom(ParsedAtom::Small('\n' as u128)));
 
     let tall_tape_line_content =
             choice((
@@ -1153,7 +1166,6 @@ pub struct LineMap {
 }
 
 impl LineMap {
-    #[inline]
     pub fn new(src: &str) -> Self {
         let mut starts = Vec::with_capacity(128);
         starts.push(0);
@@ -1167,8 +1179,7 @@ impl LineMap {
         Self { starts }
     }
 
-    #[inline(always)]
-    fn line_col(&self, byte: usize) -> (u64, u64) {
+    pub fn line_col(&self, byte: usize) -> (u64, u64) {
         let line = match self.starts.binary_search(&byte) {
             Ok(i) => i,
             Err(i) => i - 1,
@@ -1180,7 +1191,6 @@ impl LineMap {
         )
     }
 
-    #[inline(always)]
     pub fn pint(&self, span: std::ops::Range<usize>) -> Pint {
         Pint {
             p: self.line_col(span.start),
