@@ -34,6 +34,7 @@ where
 {
 }
 
+// TODO: we need to support all UTF-8
 // non-control ASCII (32-255, excluding 127/DEL)
 pub fn non_control_char<'src>(
 ) -> impl Parser<'src, &'src str, char, Err<'src>> {
@@ -584,7 +585,8 @@ pub fn soil<'src>(
     let sump = sump(hoon_wide.clone())
                 .map(|h| Woof::Hoon(h)).boxed();
 
-     // non-control 32-256, excluding DEL, {,  ", \
+    // TODO: we need to support all UTF-8
+    // non-control 32-256, excluding DEL, {,  ", \
     let wide_char = any().filter(|c: &char| {
         let x = *c as u32;
         (x >= 0x20 && x <= 0x7E && *c != '{' && *c != '"' && *c != '\\')
@@ -628,6 +630,7 @@ pub fn soil<'src>(
         .delimited_by(just("\""), just("\""))
         .labelled("Tape");
 
+    // TODO: we need to support all UTF-8
     // non-control 32-256, excluding DEL, {,  \
     let tall_char = any().filter(|c: &char| {
         let x = *c as u32;
@@ -908,29 +911,45 @@ pub fn cord<'src>(
     let escape = just('\\')
         .ignore_then(
             choice((
-                just('\\').to('\\'),
-                just('\'').to('\''),
+                just('\\').to(vec!['\\' as u8]),
+                just('\'').to(vec!['\'' as u8]),
                 // \HH hex escape
                 any().filter(|c: &char| c.is_ascii_hexdigit())
                     .then(any().filter(|c: &char| c.is_ascii_hexdigit()))
                     .map(|(a, b)| {
                         let hx = format!("{}{}", a, b);
                         let byte = u8::from_str_radix(&hx, 16).unwrap();
-                        byte as char
+                        vec![byte]
                     }),
             ))
         );
 
-    //  chars from 32-256 (excluding DEL, ', \)
-    let raw_char = any().filter(|c: &char| {
-        let x = *c as u32;
+    //  chars (excluding controls, DEL, ', \)
+    let cord_char_wide = any().filter(|c: &char| {
+        let mut buf = [0u8; 4];
+        let bytes = c.encode_utf8(&mut buf).as_bytes();
 
-        (0x20..=0x7E).contains(&x)
-            && x != 0x27   // '
-            && x != 0x5C   // '\'
-        ||
-        (0x80..=0xFF).contains(&x)
+        bytes.iter().all(|&b| b >= 32 && b != 127)
+            && !matches!(c, '\'' | '\\')
+    })
+    .map(|c: char| {
+        let mut buf = [0u8; 4];
+        let bytes = c.encode_utf8(&mut buf).as_bytes();
+        bytes.to_vec()
     });
+
+    //  chars (excluding controls, DEL)
+    let cord_char_tall = any().filter(|c: &char| {
+        let mut buf = [0u8; 4];
+        let bytes = c.encode_utf8(&mut buf).as_bytes();
+
+        bytes.iter().all(|&b| b >= 32 && b != 127)
+    })
+    .map(|c: char| {
+        let mut buf = [0u8; 4];
+        let bytes = c.encode_utf8(&mut buf).as_bytes();
+        bytes.to_vec()
+    }).boxed();
 
     let gon = just("\\")  // multiline separator
             .ignore_then(gap())
@@ -939,14 +958,15 @@ pub fn cord<'src>(
             .labelled("Cord Multiline Separator");
 
     let char_in_singled_quoted = choice((escape,
-                                         raw_char,
+                                         cord_char_wide,
                                         )).labelled("Cord Character");
 
     let single_quoted =  char_in_singled_quoted.then_ignore(gon.or_not())
                         .repeated()
-                        .collect::<Vec<char>>()
+                        .collect::<Vec<Vec<u8>>>()
+                        .map(|v| v.into_iter().flatten().collect::<Vec<u8>>())
                         .delimited_by(just("'"), just("'"))
-                        .map(cord_chars_to_atom);
+                        .map(cord_bytes_to_atom);
 
     let prefix_spaces =
         just(' ').repeated();
@@ -968,9 +988,11 @@ pub fn cord<'src>(
             .then_ignore(just("'''")).boxed();
 
     let triple_quoted_content =
-                    non_control_char()
+                    cord_char_tall
                     .repeated()
-                    .collect::<Vec<char>>().boxed();
+                    .collect::<Vec<Vec<u8>>>()
+                    .map(|v| v.into_iter().flatten().collect::<Vec<u8>>())
+                    .boxed();
 
     let triple_quoted_first_line =
                     triple_quoted_close.clone().not()
@@ -1006,14 +1028,14 @@ pub fn cord<'src>(
                 }
                 rest.insert(0, first);
 
-                let mut out: Vec<char> = vec![];
+                let mut out: Vec<u8> = vec![];
                 for (mut indent, mut line) in rest {
 
                     if indent > absolute_indent {
                         let extra = indent - absolute_indent;
                         indent = absolute_indent;
                         //  extra whitespaces belongs longs to line not indentation
-                        line.splice(0..0, std::iter::repeat(' ').take(extra));
+                        line.splice(0..0, std::iter::repeat(32).take(extra));
                     }
 
                     //  if line is just a linebreak allow it
@@ -1025,14 +1047,14 @@ pub fn cord<'src>(
                         ));
                         return Vec::new();
                     }
-                    out.push('\n');
+                    out.push(10);
                     if !line.is_empty() {
                         out.extend(line);
                     }
                 }
                 out.remove(0);
                 out
-            }).map(cord_chars_to_atom);
+            }).map(cord_bytes_to_atom);
 
     choice((
         triple_quoted,
@@ -1196,6 +1218,12 @@ impl LineMap {
             p: self.line_col(span.start),
             q: self.line_col(span.end),
         }
+    }
+
+    pub fn offset(&self, line: u64, col: u64) -> Option<usize> {
+        let line_idx = (line as usize).saturating_sub(1);
+        let line_start = *self.starts.get(line_idx)?;
+        Some(line_start + (col as usize).saturating_sub(1))
     }
 }
 
@@ -2082,8 +2110,8 @@ pub fn diff_noun(a: &Noun, b: &Noun, printed: &mut bool) -> Result<(), ()> {
 
 fn print_context(a: &Noun, b: &Noun) {
     println!("Mismatch in subtree:");
-    println!("expected: {}", print_noun(a, 10, 0));
-    println!("actual:   {}", print_noun(b, 10, 0));
+    println!("expected: {}", print_noun(a, 40, 0));
+    println!("actual:   {}", print_noun(b, 40, 0));
 }
 
 pub fn diff_and_report(a: &Noun, b: &Noun) {

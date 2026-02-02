@@ -363,7 +363,7 @@ pub fn hoon_tall_parser<'src>(
     choice(parsers)
 }
 
-// Parses Imports + Hoon
+// Parse Imports + Hoon
 //
 pub fn pile_parser<'src>(
     wer: Path,
@@ -381,7 +381,13 @@ pub fn pile_parser<'src>(
 
 }
 
-// Parses Hoon without Imports
+// Parse Hoon without Imports
+//
+//  note: Multiple hoons separated by gap will
+//        be auto-grouped in a list
+//        in order to match hoonc behaviour.
+//        This most used to allow multiple cores defined
+//        in a file without explicit concatanation.
 //
 pub fn hoon_parser<'src>(
     wer: Path,
@@ -530,12 +536,16 @@ struct Cli {
     #[arg(long = "no-imports")]
     no_imports: bool,
 
+    // write output in noun
+    #[arg(long)]
+    noun: bool,
+
     /// output file (defaults to stdout)
     #[arg(long = "out", short = 'o', value_name = "PATH")]
     out: Option<PathBuf>,
 }
 
-fn run_parser_no_imports(source_path: &PathBuf, dbug: bool, out: Option<PathBuf>) {
+fn run_parser_no_imports(source_path: &PathBuf, dbug: bool, to_noun: bool, out: Option<PathBuf>) {
 
     let source = fs::read_to_string(source_path).unwrap_or_else(|err| {
         eprintln!("Error reading file '{}': {}", source_path.display(), err);
@@ -561,7 +571,7 @@ fn run_parser_no_imports(source_path: &PathBuf, dbug: bool, out: Option<PathBuf>
 
             let mut slab = NounSlab::new();
             let start2 = Instant::now();
-            let _parsed_hoon = hoon_to_noun(&mut slab, &res);
+            let parsed_hoon = hoon_to_noun(&mut slab, &res);
             let took2 = start2.elapsed();
 
             if !source_path.is_dir() {
@@ -585,10 +595,16 @@ fn run_parser_no_imports(source_path: &PathBuf, dbug: bool, out: Option<PathBuf>
                         });
                     }
                     Some(out) => {
-                        fs::write(out, json).unwrap_or_else(|e| {
+                        let output = if to_noun {
+                            print_noun(&parsed_hoon, 4000, 0)
+                        } else {
+                            json
+                        };
+
+                        fs::write(out, output).unwrap_or_else(|e| {
                             eprintln!("Failed to write '{}': {}", out.display(), e);
                             std::process::exit(1);
-                        });
+                        })
                     }
                 }
             }
@@ -624,7 +640,7 @@ fn run_parser_no_imports(source_path: &PathBuf, dbug: bool, out: Option<PathBuf>
     };
 }
 
-fn run_parser(source_path: &PathBuf, dbug: bool, out: Option<PathBuf>) {
+fn run_parser(source_path: &PathBuf, dbug: bool, to_noun: bool, out: Option<PathBuf>) {
 
     let source = fs::read_to_string(source_path).unwrap_or_else(|err| {
         eprintln!("Error reading file '{}': {}", source_path.display(), err);
@@ -649,7 +665,7 @@ fn run_parser(source_path: &PathBuf, dbug: bool, out: Option<PathBuf>) {
 
             let mut slab = NounSlab::new();
             let start2 = Instant::now();
-            let _parsed_hoon = pile_to_noun(&mut slab, &res);
+            let parsed_hoon = pile_to_noun(&mut slab, &res);
             let took2 = start2.elapsed();
 
             if !source_path.is_dir() {
@@ -673,10 +689,16 @@ fn run_parser(source_path: &PathBuf, dbug: bool, out: Option<PathBuf>) {
                         });
                     }
                     Some(out) => {
-                        fs::write(out, json).unwrap_or_else(|e| {
+                        let output = if to_noun {
+                            print_noun(&parsed_hoon, 4000, 0)
+                        } else {
+                            json
+                        };
+
+                        fs::write(out, output).unwrap_or_else(|e| {
                             eprintln!("Failed to write '{}': {}", out.display(), e);
                             std::process::exit(1);
-                        });
+                        })
                     }
                 }
             }
@@ -691,6 +713,7 @@ fn run_parser(source_path: &PathBuf, dbug: bool, out: Option<PathBuf>) {
 
         Err(errs) => {
             for err in errs {
+
                 let span = err.span().into_range();
                 let file_id = source_path.to_string_lossy().to_string();
 
@@ -716,6 +739,7 @@ fn watch_and_parse(
     root: PathBuf,
     no_imports: bool,
     dbug: bool,
+    to_noun: bool,
     out: Option<PathBuf>,
 ) {
     let (tx, rx) = channel();
@@ -761,9 +785,9 @@ fn watch_and_parse(
                     }
 
                     if no_imports {
-                        run_parser_no_imports(&path, dbug, out.clone());
+                        run_parser_no_imports(&path, dbug, to_noun, out.clone());
                     } else {
-                        run_parser(&path, dbug, out.clone());
+                        run_parser(&path, dbug, to_noun, out.clone());
                     }
 
                     last_parsed.insert(path.clone(), now);
@@ -788,7 +812,7 @@ fn main() {
     });
 
     if cli.watch {
-        watch_and_parse(input, cli.no_imports, !cli.no_dbug, cli.out);
+        watch_and_parse(input, cli.no_imports, !cli.no_dbug, cli.noun, cli.out);
         return;
     }
 
@@ -798,9 +822,9 @@ fn main() {
 
     for source_path in inputs {
         if cli.no_imports {
-            run_parser_no_imports(&source_path, cli.no_dbug, cli.out.clone());
+            run_parser_no_imports(&source_path, !cli.no_dbug, cli.noun, cli.out.clone());
         } else {
-            run_parser(&source_path, cli.no_dbug, cli.out.clone());
+            run_parser(&source_path, !cli.no_dbug, cli.noun, cli.out.clone());
         }
     }
 

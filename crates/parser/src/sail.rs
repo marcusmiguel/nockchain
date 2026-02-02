@@ -1,6 +1,8 @@
 use crate::ast::hoon::*;
 use crate::utils::*;
 use crate::atom::*;
+use crate::runes::*;
+use crate::skin_formation::flay;
 use std::sync::Arc;
 use either::Either::{self, Left, Right};
 use chumsky::{
@@ -8,12 +10,153 @@ use chumsky::{
     error::Simple,
     input::InputRef
 };
-use crate::parser_main::{hoon_tall_parser,
+
+use crate::parser_main::{spec_wide_parser,
                             hoon_wide_parser,
-                            spec_wide_parser,
+                            hoon_tall_parser,
                             spec_parser};
 
-pub fn create_sail_parsers<'src>(
+pub fn setup_hoon_parsers<'src>(
+    source: &str,
+) -> (impl ParserExt<'src, Hoon>,
+      impl ParserExt<'src, Hoon>,
+      Arc<LineMap>)
+{
+    // TODO: get file path and dbug flag all
+    //       the way down here for better traces?
+
+    let wer: Vec<String> = vec![];
+
+    let linemap = Arc::new(LineMap::new(&source));
+
+    let (t, w) = create_hoon_parsers(wer, false, linemap.clone());
+
+    (t, w, linemap)
+}
+
+pub fn create_hoon_parsers<'src>(
+    wer: Path,
+    bug: bool,
+    linemap: Arc<LineMap>,
+) -> (impl ParserExt<'src, Hoon>,
+      impl ParserExt<'src, Hoon>) {
+
+    let mut hoon                = Recursive::declare();
+    let mut hoon_wide           = Recursive::declare();
+    let mut spec                = Recursive::declare();
+    let mut spec_wide           = Recursive::declare();
+
+    let mut hoon_no_trace       = Recursive::declare();
+    let mut hoon_wide_no_trace  = Recursive::declare();
+    let mut spec_no_trace       = Recursive::declare();
+    let mut spec_wide_no_trace  = Recursive::declare();
+
+    let spec_body = spec_parser(hoon.clone(),
+                                hoon_wide.clone(),
+                                spec.clone(),
+                                spec_wide.clone())
+                                .map_with(wrap_spec_with_trace(wer.clone(), linemap.clone()))
+                                .labelled("Spec")
+                                .boxed();
+
+    spec.define(spec_body);
+
+    let spec_wide_body =
+            spec_wide_parser(spec_wide.clone(),
+                             hoon_wide.clone(),
+                             linemap.clone())
+                            .map_with(wrap_spec_with_trace(wer.clone(), linemap.clone()))
+                            .labelled("Spec Wide")
+                            .boxed();
+
+    spec_wide.define(spec_wide_body);
+
+    let hoon_wide_body = hoon_wide_parser(
+                                hoon.clone(),
+                                hoon_wide.clone(),
+                                spec_wide.clone(),
+                                hoon_wide.clone(),
+                                hoon_wide_no_trace.clone(),
+                                wer.clone(),
+                                linemap.clone(),
+                            )
+                            .map_with(wrap_hoon_with_trace(wer.clone(), linemap.clone()))
+                            .labelled("Hoon Wide")
+                            .boxed();
+
+    hoon_wide.define(hoon_wide_body);
+
+    let hoon_body =
+            hoon_tall_parser(hoon.clone(),
+                        hoon_wide.clone(),
+                        spec.clone(),
+                        spec_wide.clone(),
+                        hoon.clone(),
+                        hoon_no_trace.clone(),
+                        hoon_wide.clone(),
+                        hoon_wide_no_trace.clone(),
+                        linemap.clone())
+                        .map_with(wrap_hoon_with_trace(wer.clone(), linemap.clone()))
+                        .labelled("Hoon")
+                        .boxed();
+
+    hoon.define(hoon_body);
+
+    let hoon_no_trace_body =
+            hoon_tall_parser(hoon_no_trace.clone(),
+                        hoon_wide_no_trace.clone(),
+                        spec_no_trace.clone(),
+                        spec_wide_no_trace.clone(),
+                        hoon.clone(),
+                        hoon_no_trace.clone(),
+                        hoon_wide.clone(),
+                        hoon_wide_no_trace.clone(),
+                        linemap.clone())
+                        .labelled("Hoon")
+                        .boxed();
+
+    hoon_no_trace.define(hoon_no_trace_body);
+
+    let hoon_wide_no_trace_body
+                    = hoon_wide_parser(
+                                        hoon_no_trace.clone(),
+                                        hoon_wide_no_trace.clone(),
+                                        spec_wide_no_trace.clone(),
+                                        hoon_wide.clone(),
+                                        hoon_wide_no_trace.clone(),
+                                        wer.clone(),
+                                        linemap.clone(),
+                                    )
+                                    .labelled("Hoon Wide")
+                                    .boxed();
+
+    hoon_wide_no_trace.define(hoon_wide_no_trace_body);
+
+    let spec_body_no_trace = spec_parser(hoon_no_trace.clone(),
+                                         hoon_wide_no_trace.clone(),
+                                         spec_no_trace.clone(),
+                                         spec_wide_no_trace.clone())
+                                        .labelled("Spec")
+                                        .boxed();
+
+    spec_no_trace.define(spec_body_no_trace);
+
+    let spec_wide_no_trace_body =
+            spec_wide_parser(spec_wide_no_trace.clone(),
+                             hoon_wide_no_trace.clone(),
+                            linemap)
+                            .labelled("Spec Wide")
+                             .boxed();
+
+    spec_wide_no_trace.define(spec_wide_no_trace_body);
+
+    let hoon      = if bug { hoon } else { hoon_no_trace };
+    let hoon_wide = if bug { hoon_wide } else { hoon_wide_no_trace };
+
+    (hoon, hoon_wide)
+}
+
+pub fn setup_sail_parsers<'src>(
     hoon: impl ParserExt<'src, Hoon>,
     hoon_wide: impl ParserExt<'src, Hoon>,
     linemap: Arc<LineMap>,
@@ -48,8 +191,7 @@ pub fn sail_tall_parser<'src>(
     hoon_wide: impl ParserExt<'src, Hoon>,
     linemap: Arc<LineMap>,
 ) -> impl Parser<'src, &'src str, Hoon, Err<'src>> {
-    let (sail_tall, _sail_wide) = create_sail_parsers(hoon, hoon_wide, linemap);
-
+    let (sail_tall, _sail_wide) = setup_sail_parsers(hoon, hoon_wide, linemap);
     sail_tall.clone()
     .map(|res: Either<Manx, Marl>| {
         match res {
@@ -65,7 +207,7 @@ pub fn sail_wide_parser<'src>(
     hoon_wide: impl ParserExt<'src, Hoon>,
     linemap: Arc<LineMap>,
 ) -> impl Parser<'src, &'src str, Hoon, Err<'src>> {
-    let (_sail_tall, sail_wide) = create_sail_parsers(hoon, hoon_wide, linemap);
+    let (_sail_tall, sail_wide) = setup_sail_parsers(hoon, hoon_wide, linemap);
 
     sail_wide.clone()
     .map(|res: Either<Manx, Marl>| {
@@ -77,6 +219,15 @@ pub fn sail_wide_parser<'src>(
     .labelled("Sail Wide")
 }
 
+fn debug_remaining<'src>(label: &'src str) -> impl Parser<'src, &'src str, (), Err<'src>> + Clone {
+    custom(move |input: &mut InputRef<'src, '_, &'src str, Err<'src>>| {
+        let start = input.cursor();
+        let remaining = input.slice_from(&start..);
+        println!("{}: {:?}", label, remaining);
+        Ok(())
+    })
+}
+
 fn tall_top<'src>(
     hoon: impl ParserExt<'src, Hoon>,
     hoon_wide: impl ParserExt<'src, Hoon>,
@@ -85,13 +236,15 @@ fn tall_top<'src>(
     linemap: Arc<LineMap>,
 ) -> impl Parser<'src, &'src str, Either<Manx, Marl>, Err<'src>> {
     choice((
-        just(' ').repeated().at_least(1)
+            just(' ').repeated().at_least(1)
             .ignore_then(quote_innards(hoon_wide.clone(),
                                         sail_wide.clone(),
                                         linemap.clone(),
                                         true,
-                                        true))
-            .map(|innards| Right(collapse_chars(false, innards))),
+                                        false))
+            .map(|innards| {
+                Right(collapse_chars(true, innards))
+            }),
         script_or_style(hoon_wide.clone())
             .then(script_style_tail())
             .map(|(marx, marl)| {
@@ -111,9 +264,9 @@ fn tall_top<'src>(
                                 sail_tall.clone(),
                                 sail_wide.clone(),
                                 linemap.clone())).map(Right),
-        // just('<').ignore_then(gap())
-                    // .ignore_then(cram(linemap.clone()))
-                    // .map(Right),
+        just('<').ignore_then(gap())
+                    .ignore_then(cram(linemap.clone()))
+                    .map(Right),
         tuna_mode()
             .then_ignore(gap())
             .then(hoon.clone())
@@ -125,7 +278,9 @@ fn tall_top<'src>(
                     TunaMode::Call => Right(vec![Tuna::Call(h)]),
                 }
             }),
-        empty().to(Right(vec![micfas(vec![ParsedAtom::Small(10)])])),
+        empty().to({
+            Right(vec![micfas(vec![ParsedAtom::Small(10)])])
+        }),
     )).boxed()
     .labelled("Sail Tall")
 }
@@ -164,24 +319,47 @@ fn cram<'src>(
 ) -> impl Parser<'src, &'src str, Marl, Err<'src>> {
     custom(move |input: &mut InputRef<'src, '_, &'src str, Err<'src>>| {
         let start = input.cursor();
-        let full_input = input.slice_from(&start..);
+
+        let start_txt = input.slice_from(&start..);
+
         let byte_offset = input.span_since(&start).start;
         let (line, col) = linemap.line_col(byte_offset);
-        println!("parsing markdown: {}", full_input.to_string());
-        let mut state = CramState::new(full_input, (line as u64, col as u64));
-        let (_final_loc, result) = state.resolve();
 
-        // while input.next().is_some() {}
+        let start_loc = (line as u64, col as u64);
+        let mut state = CramState::new(start_txt, start_loc);
+        let (hair, result) = state.resolve();
 
         match result {
-            Some((marl, ..)) => Ok(marl),
+            Some((marl, end_loc, remaining_txt)) => {
+
+                if marl.is_empty() {
+                    let span = input.span_since(&start);
+                    return Err(Rich::custom(span,
+                            "Markdown parse error".to_string()).into());
+                };
+
+                let consumed_chars = start_txt.len() - remaining_txt.len();
+
+                for _ in 0..consumed_chars {
+                    input.next();
+                }
+
+                Ok(marl)
+            },
             None => {
-                println!("cram error");
-                let span = input.span_since(&start);
-                Err(Rich::custom(span, "Parse error".to_string()).into())
+                let start_offset = input.span_since(&start).start;
+
+                let fail_offset = linemap.offset(hair.0, hair.1)
+                    .unwrap_or(start_offset);
+
+                let fail_span: SimpleSpan = (fail_offset..fail_offset).into();
+
+                Err(Rich::custom(fail_span,
+                    format!("Markdown syntax error at line {}, column {}",
+                        hair.0, hair.1)))
             }
         }
-    }).labelled("Cram")
+    }).labelled("Markdown")
 }
 
 pub fn collapse_chars(tall: bool, reb: Vec<Either<Tuna, ParsedAtom>>) -> Marl {
@@ -194,41 +372,27 @@ pub fn collapse_chars(tall: bool, reb: Vec<Either<Tuna, ParsedAtom>>) -> Marl {
                 sim.push(atom);
             }
             Left(tuna) => {
-                flush_sim(&mut sim, &mut tuz, tall);
+                if !sim.is_empty() {
+                    tuz.push(micfas(std::mem::take(&mut sim)));
+                }
                 tuz.push(tuna);
             }
         }
     }
 
-    flush_sim(&mut sim, &mut tuz, tall);
-
-    tuz
-}
-
-fn flush_sim(sim: &mut Vec<ParsedAtom>, tuz: &mut Marl, tall: bool) {
-    if sim.is_empty() {
-        return;
+    if tall {
+        while let Some(ParsedAtom::Small(32)) = sim.last() {
+            sim.pop();
+        }
+        sim.push(ParsedAtom::Small(10));
+        tuz.push(micfas(sim));
+    } else {
+        if !sim.is_empty() {
+            tuz.push(micfas(sim));
+        }
     }
 
-    let final_atoms = if tall {
-        let mut result = vec![ParsedAtom::Small(10)]; // prepend newline (10)
-        let mut trimming_leading_spaces = true;
-
-        for atom in sim.drain(..) {
-            if trimming_leading_spaces {
-                if let ParsedAtom::Small(32) = atom {
-                    continue;
-                }
-                trimming_leading_spaces = false;
-            }
-            result.push(atom);
-        }
-        result
-    } else {
-        std::mem::take(sim)
-    };
-
-    tuz.push(micfas(final_atoms));
+    tuz
 }
 
 pub fn micfas(atoms: Vec<ParsedAtom>) -> Tuna {
@@ -437,7 +601,9 @@ fn inline_embed<'src>(
                 TunaMode::Call => Tuna::Call(h),
             }
         }),
-        sump(hoon_wide.clone()).map(|h| Tuna::Tape(h)),
+        sump(hoon_wide.clone()).map(|h| {
+            Tuna::Tape(h)
+        }),
     ))
 }
 
@@ -462,30 +628,28 @@ fn quote_innards<'src>(
                             byte as u128
                         })
                     )))
-                    .map(|n| Right(ParsedAtom::Small(n)))
+                    .map(|n| {
+                        Right(ParsedAtom::Small(n))
+                    })
                     .boxed();
 
     //  chars from 32-256 (excluding DEL, {, \)
-    let tall_char = any().filter(|c: &char| {
+    let tall_char  = any().filter(|c: &char| {
         let x = *c as u32;
-
         (0x20..=0x7E).contains(&x)
-            && x != 0x7b   // {
-            && x != 0x5C   // '\'
-        ||
-        (0x80..=0xFF).contains(&x)
+            && x != 0x7B    // {
+            && x != 0x5C    // \
+        || (0x80..=0xFF).contains(&x)
     });
 
     //  chars from 32-256 (excluding DEL, {, \, ")
     let wide_char = any().filter(|c: &char| {
         let x = *c as u32;
-
         (0x20..=0x7E).contains(&x)
-            && x != 0x7b   // {
-            && x != 0x5C   // '\'
-            && x != 0x5C   // '"'
-        ||
-        (0x80..=0xFF).contains(&x)
+            && x != 0x7B    // {
+            && x != 0x5C    // \
+            && x != 0x22    // "
+        || (0x80..=0xFF).contains(&x)
     });
 
     let char =
@@ -500,19 +664,13 @@ fn quote_innards<'src>(
         };
 
     let embed = inline_embed(hoon_wide.clone(), sail_wide.clone(), linemap)
-                .map(|tuna| Left(tuna));
+                .map(|tuna| {
+                    Left(tuna)
+                }).labelled("Embed");
 
     if allow_linebreak {
-        choice((escaped,
-                embed,
-                char))
-        .repeated()
-        .collect::<Vec<Either<Tuna, ParsedAtom>>>()
-        .boxed()
-    } else {
-        let linebreak = just('\n')
-                        .ignore_then(just("\"\"\"")).not()
-                        .ignore_then(just('\n')
+        let linebreak = just("\n\"\"\"").not()
+                        .ignore_then(newline()
                                      .to(Right(ParsedAtom::Small(10 as u128))));
 
         choice((escaped,
@@ -521,6 +679,15 @@ fn quote_innards<'src>(
                 linebreak))
         .repeated()
         .collect::<Vec<Either<Tuna, ParsedAtom>>>()
+        .labelled("Escaped or Char or Embed or Linebreak")
+        .boxed()
+    } else {
+        choice((escaped,
+        embed,
+        char))
+        .repeated()
+        .collect::<Vec<Either<Tuna, ParsedAtom>>>()
+        .labelled("Escaped or Char or Embed")
         .boxed()
     }
 }
@@ -618,46 +785,48 @@ fn wide_quote<'src>(
 ) -> impl Parser<'src, &'src str, Marl, Err<'src>> {
     let single_line =
             just("\"\"\"").not()
-                .ignore_then(quote_innards(hoon_wide.clone(), sail_wide.clone(), linemap.clone(), tall, true))
-                .map(move |innards| collapse_chars(tall, innards))
+                .ignore_then(quote_innards(hoon_wide.clone(), sail_wide.clone(), linemap.clone(), tall, false))
+                .map(move |innards| {
+                    collapse_chars(tall, innards)
+                })
                 .delimited_by(just("\""), just("\""));
 
-    let prefix_spaces = just(' ').repeated();
+    let multi_line_prefix_spaces = just(' ').repeated();
     let linemap2 = linemap.clone();
-    let open =
+    let multi_line_open =
         just("\"\"\"").map_with(move |_, extra| {
             let span: SimpleSpan = extra.span();
             let (_line, col) = linemap2.line_col(span.start);
             if col > 0 { (col - 1) as usize } else { 0 }
         });
 
-    let close =
+    let multi_line_close =
         newline()
             .ignore_then(just(' ').repeated().count())
             .then_ignore(just("\"\"\"")).boxed();
 
-    let line_content =
+    let multi_line_content =
         quote_innards(hoon_wide.clone(),
                         sail_wide.clone(),
                         linemap.clone(),
                         tall,
-                        false);
+                        true);
 
     let line =
-        close.clone().not()
+        multi_line_close.clone().not()
         .ignore_then(
             newline()
             .ignore_then(just(' ').repeated().count())
-            .then(line_content));
+            .then(multi_line_content));
 
     let multi_line =
-        prefix_spaces
-        .ignore_then(open)
+        multi_line_prefix_spaces
+        .ignore_then(multi_line_open)
         .then(line
                 .repeated()
                 .collect::<Vec<(usize, Vec<Either<Tuna, ParsedAtom>>)>>())
-        .then(close)
-        .validate(|((base_indent, lines), close_indent), extra, emit| {
+        .then(multi_line_close)
+        .validate(move |((base_indent, lines), close_indent), extra, emit| {
             let span = extra.span();
 
             if close_indent != base_indent {
@@ -695,12 +864,11 @@ fn wide_quote<'src>(
             if !out.is_empty() {
                 out.remove(0);
             }
-
-            collapse_chars(false, out)
+            collapse_chars(tall, out)
         });
 
     choice((single_line,
-            multi_line))
+            multi_line)).labelled("Quote")
 }
 
 fn tall_attrs<'src>(
@@ -736,12 +904,11 @@ fn tall_kids<'src>(
                     }})
                 .labelled("Sail Tall");
 
-    // let markdown = cram(linemap.clone())
-    //                         .map(Right)
-    //                         .labelled("MarkDown");
+    let markdown = cram(linemap.clone())
+                            .map(Right)
+                            .labelled("MarkDown");
 
-    // choice((sail, markdown))
-    sail
+    choice((sail, markdown))
     .separated_by(gap())
     .at_least(1)
     .collect::<Vec<Either<Tuna, Marl>>>()
@@ -759,7 +926,9 @@ fn tall_tail<'src>(
     let empty_case = just(';').to(vec![]);
 
     let wrapped_case = just(':')
-        .ignore_then(wrapped_elems(hoon_wide.clone(), sail_wide.clone(), linemap.clone()));
+        .ignore_then(wrapped_elems(hoon_wide.clone(),
+                                    sail_wide.clone(),
+                                    linemap.clone()));
 
     let quote_case = just(": ")
         .ignore_then(
@@ -767,7 +936,7 @@ fn tall_tail<'src>(
                           sail_wide.clone(),
                           linemap.clone(),
                           true,
-                          true)
+                          false)
                 .map(|v| collapse_chars(false, v)));
 
     let indented_case =
@@ -817,13 +986,14 @@ fn script_or_style<'src>(
     tag.then(wide_attrs(hoon_wide))
          .map(|(name, attrs)| {
             Marx {
-                n: Mane::Tag("sadd".to_string()),
+                n: Mane::Tag(name.to_string()),
                 a: attrs,
             }
         })
 }
 
-fn script_style_tail<'src>() -> impl Parser<'src, &'src str, Marl, Err<'src>> {
+fn script_style_tail<'src>(
+) -> impl Parser<'src, &'src str, Marl, Err<'src>> {
     let content =
         choice((just(' ')
                     .ignore_then(non_control_char()
@@ -840,8 +1010,12 @@ fn script_style_tail<'src>() -> impl Parser<'src, &'src str, Marl, Err<'src>> {
             .bytes()
             .map(|b| ParsedAtom::Small(b as u128))
             .collect();
-        vec![micfas(atoms)]
+        micfas(atoms)
     })
+    .separated_by(gap())
+    .at_least(1)
+    .collect::<Marl>()
+    .delimited_by(gap(), gap().ignore_then(just("==")))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1006,46 +1180,46 @@ fn graf_to_tuna(grafs: Vec<Graf>) -> Marl {
             return vec![];
         }
 
-fn main(grafs: &[Graf]) -> Marl {
-    if grafs.is_empty() {
-        return vec![];
-    }
+    fn main(grafs: &[Graf]) -> Marl {
+        if grafs.is_empty() {
+            return vec![];
+        }
 
-    let first = &grafs[0];
-    let rest = &grafs[1..];
+        let first = &grafs[0];
+        let rest = &grafs[1..];
 
-    match first {
-        Graf::Text(_) => {
-            let mut fip = vec![first.text().unwrap().clone()];
-            let mut remaining = rest;
-            loop {
-                if remaining.is_empty() {
-                    let full_text = fip.join("");
-                    return vec![micfas(
-                        full_text.bytes().map(|b| ParsedAtom::Small(b as u128)).collect()
-                    )];
-                }
+        match first {
+            Graf::Text(_) => {
+                let mut fip = vec![first.text().unwrap().clone()];
+                let mut remaining = rest;
+                loop {
+                    if remaining.is_empty() {
+                        let full_text = fip.join("");
+                        return vec![micfas(
+                            full_text.bytes().map(|b| ParsedAtom::Small(b as u128)).collect()
+                        )];
+                    }
 
-                let next = &remaining[0];
-                if let Graf::Text(_) = next {
-                    fip.push(next.text().unwrap().to_string());
-                    remaining = &remaining[1..];
-                } else {
-                    let full_text = fip.join("");
-                    let text_node = micfas(
-                        full_text.bytes().map(|b| ParsedAtom::Small(b as u128)).collect()
-                    );
-                    let tail = main(remaining);
-                    return weld(vec![text_node], tail);
+                    let next = &remaining[0];
+                    if let Graf::Text(_) = next {
+                        fip.push(next.text().unwrap().to_string());
+                        remaining = &remaining[1..];
+                    } else {
+                        let full_text = fip.join("");
+                        let text_node = micfas(
+                            full_text.bytes().map(|b| ParsedAtom::Small(b as u128)).collect()
+                        );
+                        let tail = main(remaining);
+                        return weld(vec![text_node], tail);
+                    }
                 }
             }
+            _ => {
+                let item_nodes = item(first);
+                let tail = main(rest);
+                weld(item_nodes, tail)
+            }
         }
-        _ => {
-            let item_nodes = item(first);
-            let tail = main(rest);
-            weld(item_nodes, tail)
-        }
-    }
     }
 
     main(&grafs)
@@ -1116,7 +1290,7 @@ struct CramState {
     ind: (u64, u64),           // (out, inr) ident level
     hac: Vec<Item>,            // stack of items
     cur: Item,                 // current item under construction
-    par: Option<(Hair, Wall)>, // current paragraph being ead
+    par: Option<(Hair, Wall)>, // current paragraph being read
     loc: Hair,                 // current position
     txt: String,               // remaining input
 }
@@ -1144,11 +1318,11 @@ impl<'src> CramState {
         if let Some(err) = self.err {
             return (err, None);
         }
-
         self = self.close_par();
         loop {
             if self.hac.is_empty() {
                 let result = self.cur_to_tarp();
+
                 return (self.loc, Some((result, self.loc, self.txt.to_string())));
             }
             self = self.close_item();
@@ -1157,15 +1331,18 @@ impl<'src> CramState {
 
     fn line(mut self,
     ) -> Self {
+
         if self.err.is_some() {
             return self;
         }
 
         let saw = self.clone().look();
+
         if saw.is_none() {
             let (lin, err, line_loc, line_text) = self.read_line();
             self.loc = line_loc;
             self.txt = line_text;
+
             if let Some(e) = err {
                 self.err = e;
                 return self;
@@ -1176,6 +1353,7 @@ impl<'src> CramState {
         }
 
         let mut saw = saw.unwrap();
+
         if matches!(saw.sty, TrigStyle::End(_)) {
             self.loc.1 = saw.col;
             return self;
@@ -1187,7 +1365,8 @@ impl<'src> CramState {
 
         if self.par.is_none() ||
             (matches!(self.cur.0, Mite::Down | Mite::Lime | Mite::Bloc) &&
-            !matches!(saw.sty, TrigStyle::OldText) && saw.col > self.ind.1) {
+            (!matches!(saw.sty, TrigStyle::OldText) || saw.col > self.ind.1)) {
+
             self = self.close_par();
 
             self = self.back(saw.col);
@@ -1222,7 +1401,6 @@ impl<'src> CramState {
                     self
                 }
             };
-
             self = match &saw.sty {
                 TrigStyle::One(kind) => {
                     self.read_one(kind.clone())
@@ -1236,14 +1414,16 @@ impl<'src> CramState {
             return self.line();
         }
 
-        let par_is_empty = self.par.as_ref().map_or(true, |(_, wall)| wall.is_empty());
+        let par_is_empty = self
+                            .par.as_ref()
+                            .map_or(true, |(_, wall)| wall.is_empty());
 
-        let block_is_legal = if par_is_empty {
+        let first_line_is_legal = if par_is_empty {
             true
         } else {
             match self.cur.0 {
                 Mite::Lord | Mite::Lunt => {
-                    false
+                    panic!()
                 }
                 Mite::Head => {
                     false
@@ -1258,7 +1438,7 @@ impl<'src> CramState {
             }
         };
 
-        if !block_is_legal {
+        if !first_line_is_legal {
             let mut err_state = self.clone();
             err_state.err = Some((self.loc.0, saw.col));
             return err_state;
@@ -1274,26 +1454,30 @@ impl<'src> CramState {
             (loc, wall)
         });
 
+        //  if End or error is found
+        //  stop the recursion
+        if let Some(e) = err {
+            self.err = e;
+            return self;
+        }
         self.line()
     }
 
     fn look(mut self) -> Option<Trig> {
         let linemap = Arc::new(LineMap::new(&self.txt));
-
-        let mut t = look_parse(linemap)
+        match look_parse(linemap)
+            .then_ignore(any().repeated().collect::<String>())
             .parse(&self.txt)
-            .into_result()
-            .ok()??;
-
-        match t.sty {
-            TrigStyle::End(_) => {}
-            _ if t.col < self.ind.0 => {
-                t.sty = TrigStyle::End(EndType::Dent);
+            .into_result() {
+                Ok(Some(mut t)) => {
+                    if !matches!(t.sty, TrigStyle::End(_))
+                        && t.col < self.ind.0 {
+                        t.sty = TrigStyle::End(EndType::Dent);
+                    }
+                    return Some(t);
+                },
+                _ => None,
             }
-            _ => {}
-        }
-
-        Some(t)
     }
 
     fn read_one(mut self,
@@ -1306,7 +1490,10 @@ impl<'src> CramState {
 
         match kind {
             OneType::Expr =>
-                self.parse_block(input, expr_parse(hoon.clone(), hoon_wide.clone(), linemap.clone())),
+                self.parse_block(input,
+                                 expr_parse(hoon.clone(),
+                                            hoon_wide.clone(),
+                                            linemap.clone())),
             OneType::Rule =>
                 self.parse_block(input, hrul_parse()),
             OneType::Fens =>
@@ -1318,16 +1505,26 @@ impl<'src> CramState {
     where
         P: chumsky::Parser<'src, &'src str, Marl, Err<'src>>,
     {
-        match parser.parse(input).into_result() {
-            Ok(res) => {
-                // let consumed = input.len() - rest.len();
-                // self.txt = rest.to_string();
-                // self.loc.1 += consumed as u64;
-                // self.cur.1 = weld(res, self.cur.1);
+        match parser.then(any().repeated().collect::<String>())
+                .parse(input)
+                .into_result() {
+            Ok((result, rest)) => {
+                let consumed = input.len() - rest.len();
+                self.txt = rest.to_string();
+                self.loc.1 += consumed as u64;
+                let mut flipped = result;
+                flipped.reverse();
+                self.cur.1 = weld(flipped, self.cur.1);
                 self
             }
-            Err(pos) => {
-                // self.err = Some((self.loc.0, pos));
+            Err(err) => {
+                let first = err.into_iter().next().unwrap();
+                let span = first.span().into_range();
+
+                let linemap = LineMap::new(input);
+                let (line, col) = linemap.line_col(span.start);
+
+                self.err = Some((line, col));
                 self
             }
         }
@@ -1352,18 +1549,29 @@ impl<'src> CramState {
                 self.cur.1.insert(0, br_node);
             }
 
-            let stanza_nodes: Vec<Tuna> = par_wall
+            let stanza_nodes: Vec<Tuna> =
+                par_wall
                 .into_iter()
                 .map(|line_str| {
+
                     let full_line = format!("{}\n", line_str);
                     let atoms: Vec<ParsedAtom> = full_line
                         .bytes()
                         .map(|b| ParsedAtom::Small(b as u128))
                         .collect();
-                    micfas(atoms)
+                    let text_node = micfas(atoms);
+
+                    Tuna::Manx(Manx {
+                        g: Marx {
+                            n: Mane::Tag("p".to_string()),
+                            a: vec![],
+                        },
+                        c: vec![text_node],
+                    })
                 })
                 .collect();
 
+            self.par = None;
             self.cur.1 = weld(stanza_nodes, self.cur.1);
             self.ind.1 -= 8;
             return self.close_item();
@@ -1371,7 +1579,6 @@ impl<'src> CramState {
 
         let yex: String = par_wall
             .into_iter()
-            .rev()
             .map(|line_str| {
                 format!("{}{}\n", " ".repeat((self.ind.1 - 1) as usize), line_str)
             })
@@ -1379,7 +1586,8 @@ impl<'src> CramState {
             .join("");
 
         let (hoon, hoon_wide, linemap) = setup_hoon_parsers(yex.as_str());
-        let (sail_tall, sail_wide) = create_sail_parsers(hoon.clone(),
+
+        let (sail_tall, sail_wide) = setup_sail_parsers(hoon.clone(),
                                                         hoon_wide.clone(),
                                                         linemap.clone());
 
@@ -1480,9 +1688,14 @@ impl<'src> CramState {
         let mut txt: &str = &self.txt;
         let mut loc = self.loc;
 
+        //  read until '\n' and check identation
         loop {
+            //  if txt is empty returns error
             if txt.is_empty() {
-                return ("".to_string(), Some(Some(loc)), self.loc, self.txt.to_string());
+                return ("".to_string(),
+                        Some(Some(loc)),
+                        loc,
+                        txt.to_string());
             }
 
             let ch = txt.chars().next().unwrap();
@@ -1490,13 +1703,20 @@ impl<'src> CramState {
             if ch != '\n' {
                 if self.ind.1 > loc.1 {
                     if ch != ' ' {
-                        return ("".to_string(), Some(Some(loc)), self.loc, self.txt.to_string());
+                        //  identation mismatch
+                        //  returns error
+                        return ("".to_string(),
+                                Some(Some(loc)),
+                                loc,
+                                txt.to_string());
                     }
+                    // empty space continue
                     txt = &txt[1..];
                     loc.1 += 1;
                     continue;
                 }
 
+                // push char an continue
                 txt = &txt[1..];
                 lin.push(ch);
                 loc.1 += 1;
@@ -1511,6 +1731,7 @@ impl<'src> CramState {
         let eat_newline_loc = (loc.0 + 1, 1u64);
         let eat_newline_txt = (&txt[1..]).to_string();
 
+        //  look at the rest of the string
         let saw = {
             let mut tmp = self.clone();
             tmp.loc = eat_newline_loc;
@@ -1518,15 +1739,16 @@ impl<'src> CramState {
             tmp.look()
         };
 
+        //  check if the end (==) was found after the line
         if let Some(Trig {
             sty: TrigStyle::End(end_type),
             ..
         }) = saw {
+            //  End was found, return Some to stop the recursion
             if matches!(end_type, EndType::Stet | EndType::Dent) {
-                return (lin, Some(None), self.loc, self.txt.to_string());
+                return (lin, Some(None), loc, txt.to_string());
             }
         }
-
         (lin, None, eat_newline_loc, eat_newline_txt.to_string())
     }
 
@@ -1542,7 +1764,7 @@ impl<'src> CramState {
 
     fn open_item_push(mut self, mite: Mite) -> Self {
         self.hac.push(self.cur);
-        self.cur = (mite, Vec::new());
+        self.cur = (mite, Vec::new());  
         self
     }
 
@@ -1571,68 +1793,30 @@ impl<'src> CramState {
 fn look_parse<'src>(
     linemap: Arc<LineMap>,
 ) -> impl Parser<'src, &'src str, Option<Trig>, Err<'src>> {
-    let linemap = linemap.clone();
-
-    just(" ").repeated().ignored()
-        .ignore_then(
-            choice((
-                newline().to(None),
-                end().to(Some(Trig {
-                    col: 0,
-                    sty: TrigStyle::End(EndType::Done),
-                })),
-                just("==").to(Some(Trig {
-                    col: 0,
-                    sty: TrigStyle::End(EndType::Stet),
-                })),
-                just("---").to(Some(Trig {
-                    col: 0,
-                    sty: TrigStyle::One(OneType::Rule),
-                })),
-                just("```").to(Some(Trig {
-                    col: 0,
-                    sty: TrigStyle::One(OneType::Fens),
-                })),
-                just(";").to(Some(Trig {
-                    col: 0,
-                    sty: TrigStyle::One(OneType::Expr),
-                })),
-                just("#").repeated().then_ignore(just(' ')).to(Some(Trig {
-                    col: 0,
-                    sty: TrigStyle::New(TrigNew::Head),
-                })),
-                just("- ").to(Some(Trig {
-                    col: 0,
-                    sty: TrigStyle::New(TrigNew::Lint),
-                })),
-                just("+ ").to(Some(Trig {
-                    col: 0,
-                    sty: TrigStyle::New(TrigNew::Lite),
-                })),
-                just("> ").to(Some(Trig {
-                    col: 0,
-                    sty: TrigStyle::New(TrigNew::Bloc),
-                })),
-                empty().to(Some(Trig {
-                    col: 0,
-                    sty: TrigStyle::OldText,
-                })),
-            ))
-            .map_with(move |trig_opt, extra| {
-                if let Some(mut trig) = trig_opt {
-                    let span: SimpleSpan = extra.span();
-                    let (_line, col) = linemap.line_col(span.start);
-                    if col == 0 {
-                        trig.col = 0 as u64;
-                    } else {
-                        trig.col = (col - 1) as u64;
-                    }
-                    Some(trig)
-                } else {
-                    None
-                }
-            })
-        )
+    just(' ')
+    .repeated()
+    .map_with(move |_, extra| {
+        let span: SimpleSpan = extra.span();
+        let (_, col) = linemap.line_col(span.start);
+        col as usize
+    })
+    .then(choice((
+        newline().to(None),
+        end().to(Some(TrigStyle::End(EndType::Done))),
+        just("==").to(Some(TrigStyle::End(EndType::Stet))),
+        just("---").to(Some(TrigStyle::One(OneType::Rule))),
+        just("```").to(Some(TrigStyle::One(OneType::Fens))),
+        just(";").to(Some(TrigStyle::One(OneType::Expr))),
+        just('#')
+            .repeated()
+            .then_ignore(just(' '))
+            .to(Some(TrigStyle::New(TrigNew::Head))),
+        just("- ").to(Some(TrigStyle::New(TrigNew::Lint))),
+        just("+ ").to(Some(TrigStyle::New(TrigNew::Lite))),
+        just("> ").to(Some(TrigStyle::New(TrigNew::Bloc))),
+        empty().to(Some(TrigStyle::OldText)),
+    )))
+    .map(|(col, style_opt)| style_opt.map(|sty| Trig { col: col as u64, sty: sty }))
 }
 
 fn calf_tic_parse<'src>(
@@ -1650,11 +1834,10 @@ fn calf_tic_parse<'src>(
 fn cash_parse<'src>(
     tem: char,
 ) -> impl Parser<'src, &'src str, String, Err<'src>> {
-    let whit = one_of(" \n");
     let bas = just('\\');
 
     choice((
-        whit.to(' '),
+        whit().to(' '),
         bas.ignore_then(just(tem).clone()),
         just(tem).not().ignore_then(non_control_char()),
     ))
@@ -1689,6 +1872,7 @@ fn tics_parse<'src>()
 fn fens_parse<'src>(
     col: u64
 ) -> impl Parser<'src, &'src str, Marl, Err<'src>> {
+
     let ace = just(' ');
     let prn = non_control_char();
 
@@ -1742,11 +1926,11 @@ fn expr_parse<'src>(
     linemap: Arc<LineMap>,
 ) -> impl Parser<'src, &'src str, Marl, Err<'src>> {
 
-    let (sail_tall, _sail_wide) = create_sail_parsers(hoon, hoon_wide, linemap);
+    let (sail_tall, _sail_wide) = setup_sail_parsers(hoon, hoon_wide, linemap);
 
     just(';')
     .ignore_then(sail_tall.clone())
-    .delimited_by(just(' ').repeated(), gap())
+    .delimited_by(just(' ').repeated(), gap().rewind())
     .map(|t: Either<Manx, Marl>| {
         match t {
             Left(m) => drop_top(Left(Tuna::Manx(m))),
@@ -1755,14 +1939,24 @@ fn expr_parse<'src>(
     })
 }
 
+pub fn whit<'src>(
+) -> impl Parser<'src, &'src str, String, Err<'src>>
+{
+    just(' ')
+    .or(just('\n'))
+    .repeated()
+    .at_least(1)
+    .to(' '.to_string())
+    .labelled("Whitespaces or Newlines")
+}
+
 fn para_parse<'src>(
     hoon_wide: impl ParserExt<'src, Hoon> + Clone,
     sail_wide: impl ParserExt<'src, Either<Manx, Marl>> + Clone,
     linemap: Arc<LineMap>,
 ) -> impl Parser<'src, &'src str, Marl, Err<'src>> {
-    let whit = one_of(" \n").repeated().at_least(1);
 
-    whit.or_not()
+    whit().or_not()
     .ignore_then(
     down_parse(hoon_wide, sail_wide, linemap)
         .map(|kids| {
@@ -1777,7 +1971,7 @@ fn para_parse<'src>(
                     c: kids,
                 })]
             }
-        }))
+        })).boxed()
 }
 
 fn werk_parse<'src>(
@@ -1785,10 +1979,15 @@ fn werk_parse<'src>(
     sail_wide: impl ParserExt<'src, Either<Manx, Marl>> + Clone,
     linemap: Arc<LineMap>,
 ) -> impl Parser<'src, &'src str, Vec<Graf>, Err<'src>> {
-    word_parse(hoon_wide, sail_wide.clone(), linemap)
+    recursive(|werk| {
+        word_parse(hoon_wide, sail_wide.clone(), werk, linemap)
         .repeated()
         .collect::<Vec<Vec<Graf>>>()
-        .map(|v| v.into_iter().flatten().collect())
+        .map(|v| {
+            v.into_iter().flatten().collect()
+        })
+        .boxed()
+    })
 }
 
 fn reparse<'src, A, B>(
@@ -1816,10 +2015,9 @@ fn reparse<'src, A, B>(
 fn word_parse<'src>(
     hoon_wide: impl ParserExt<'src, Hoon> + Clone,
     sail_wide: impl ParserExt<'src, Either<Manx, Marl>> + Clone,
+    werk:      impl ParserExt<'src, Vec<Graf>> + Clone,
     linemap: Arc<LineMap>,
 ) -> impl Parser<'src, &'src str, Vec<Graf>, Err<'src>> {
-
-    let whit = one_of(" \n").repeated().at_least(1);
 
     let ordinary = any().filter(|c: &char| c.is_ascii_alphabetic())
                     .then(any()
@@ -1848,16 +2046,15 @@ fn word_parse<'src>(
         vec![Graf::Expr(br_node)]
     });
 
-    let bold = reparse(cash_parse('*'),
-                        werk_parse(hoon_wide.clone(), sail_wide.clone(), linemap.clone()).boxed())
+    let bold = reparse(cash_parse('*'), werk.clone())
         .delimited_by(just('*'), just('*'))
         .map(|b| vec![Graf::Bold(b)]);
 
-    let italic = reparse(cash_parse('_'), werk_parse(hoon_wide.clone(), sail_wide.clone(), linemap.clone()).boxed())
+    let italic = reparse(cash_parse('_'), werk.clone()).boxed()
         .delimited_by(just('_'), just('_'))
         .map(|i| vec![Graf::Talc(i)]);
 
-    let quoted = reparse(cash_parse('\"'), werk_parse(hoon_wide.clone(), sail_wide.clone(), linemap.clone()).boxed())
+    let quoted = reparse(cash_parse('\"'), werk.clone()).boxed()
         .delimited_by(just("\""), just("\""))
         .map(|q| vec![Graf::Quod(q)]);
 
@@ -1885,12 +2082,9 @@ fn word_parse<'src>(
                 });
 
     let link = just('{')
-        .ignore_then(reparse(cash_parse('}'),
-                    werk_parse(hoon_wide.clone(),
-                                sail_wide.clone(),
-                                linemap.clone()).boxed()))
+        .ignore_then(reparse(cash_parse('}'), werk.clone()))
         .then_ignore(just('}'))
-        .then_ignore(whit.clone().or_not())
+        .then_ignore(whit().or_not())
         .then(just('(')
                 .ignore_then(cash_parse(')'))
                 .then_ignore(just(')')))
@@ -1900,7 +2094,7 @@ fn word_parse<'src>(
         .ignore_then(
             just('{').ignore_then(cash_parse('}')).then_ignore(just('}'))
         )
-        .then_ignore(whit.clone().or_not())
+        .then_ignore(whit().or_not())
         .then(
             just('(').ignore_then(cash_parse(')')).then_ignore(just(')'))
         )
@@ -1912,7 +2106,7 @@ fn word_parse<'src>(
         .map(|e| vec![Graf::Expr(e)]);
 
     let lin = linemap.clone();
-    let hoon_list = choice((whit.clone().to(' '.to_string()),
+    let hoon_list = choice((whit(),
                             empty()
                                 .try_map(move |_, span: SimpleSpan| {
                                     let (_line, col) = lin.line_col(span.start);
@@ -1928,12 +2122,14 @@ fn word_parse<'src>(
                             .to_slice()
                             .map(|s| Graf::Code(s.to_string()))
                         )
-                    .then_ignore(whit.clone().or_not())
-                    .map(|(p, q)| vec![p, q]);
+                    .then_ignore(whit().rewind())
+                    .map(|(p, q)| {
+                        vec![p, q]
+                });
 
     let lin2 = linemap.clone();
     let hoon_constant_list =
-                    choice((whit.clone().to(' '.to_string()),
+                    choice((whit(),
                             empty()
                                 .try_map(move |_, span: SimpleSpan| {
                                     let (_line, col) = lin2.line_col(span.start);
@@ -1957,12 +2153,12 @@ fn word_parse<'src>(
                         ))
                         .map(|s| Graf::Code(s.to_string()))
                     )
-                    .then_ignore(whit.clone().or_not())
-                    .map(|(p, q)| vec![p, q]);
+                    .then_ignore(whit().rewind())
+                    .map(|(p, q)| {
+                        vec![p, q]
+                    });
 
-    let whitespace = whit.clone()
-                    .to(' '.to_string())
-                    .map(|c| vec![Graf::Text(c)]);
+    let whitespace = whit().map(|c| vec![Graf::Text(c)]);
 
     let byte = just(' ').not()
                 .ignore_then(non_control_char().map(|c| c.to_string()))
@@ -1979,10 +2175,10 @@ fn word_parse<'src>(
         arm,
         link,
         mage,
-        interpolated,
         hoon_list,
         hoon_constant_list,
         whitespace,
+        interpolated,
         byte,
     ))
 }
@@ -1992,7 +2188,6 @@ fn head_parse<'src>(
     sail_wide: impl ParserExt<'src, Either<Manx, Marl>> + Clone,
     linemap: Arc<LineMap>,
 ) -> impl Parser<'src, &'src str, Marl, Err<'src>> {
-    let whit = one_of(" \n").repeated().at_least(1);
 
     just(' ').repeated()
     .ignore_then(
@@ -2002,7 +2197,7 @@ fn head_parse<'src>(
         .at_most(6)
         .count()
     )
-    .then(whit.clone()
+    .then(whit()
             .ignore_then(down_parse(hoon_wide, sail_wide, linemap)))
     .map(|(hashes, kids)| {
         let tag = format!("h{}", hashes);
@@ -2023,145 +2218,7 @@ fn down_parse<'src>(
     linemap: Arc<LineMap>,
 ) -> impl Parser<'src, &'src str, Marl, Err<'src>> {
     werk_parse(hoon_wide, sail_wide.clone(), linemap)
-        .map(|grafs| graf_to_tuna(grafs))
-}
-
-pub fn setup_hoon_parsers<'src>(
-    source: &str,
-) -> (impl ParserExt<'src, Hoon>,
-      impl ParserExt<'src, Hoon>,
-      Arc<LineMap>)
-{
-    // TODO: get file path anddbug flag all the way down into here?
-
-    let wer: Vec<String> = vec![];
-
-    let linemap = Arc::new(LineMap::new(&source));
-
-    let (t, w) = create_hoon_parsers(wer, false, linemap.clone());
-
-    (t, w, linemap)
-}
-
-pub fn create_hoon_parsers<'src>(
-    wer: Path,
-    bug: bool,
-    linemap: Arc<LineMap>,
-) -> (impl ParserExt<'src, Hoon>,
-      impl ParserExt<'src, Hoon>) {
-
-    let mut hoon                = Recursive::declare();
-    let mut hoon_wide           = Recursive::declare();
-    let mut spec                = Recursive::declare();
-    let mut spec_wide           = Recursive::declare();
-
-    let mut hoon_no_trace       = Recursive::declare();
-    let mut hoon_wide_no_trace  = Recursive::declare();
-    let mut spec_no_trace       = Recursive::declare();
-    let mut spec_wide_no_trace  = Recursive::declare();
-
-    let spec_body = spec_parser(hoon.clone(),
-                                hoon_wide.clone(),
-                                spec.clone(),
-                                spec_wide.clone())
-                                .map_with(wrap_spec_with_trace(wer.clone(), linemap.clone()))
-                                .labelled("Spec")
-                                .boxed();
-
-    spec.define(spec_body);
-
-    let spec_wide_body =
-            spec_wide_parser(spec_wide.clone(),
-                             hoon_wide.clone(),
-                             linemap.clone())
-                            .map_with(wrap_spec_with_trace(wer.clone(), linemap.clone()))
-                            .labelled("Spec Wide")
-                            .boxed();
-
-    spec_wide.define(spec_wide_body);
-
-    let hoon_wide_body = hoon_wide_parser(
-                                hoon.clone(),
-                                hoon_wide.clone(),
-                                spec_wide.clone(),
-                                hoon_wide.clone(),
-                                hoon_wide_no_trace.clone(),
-                                wer.clone(),
-                                linemap.clone(),
-                            )
-                            .map_with(wrap_hoon_with_trace(wer.clone(), linemap.clone()))
-                            .labelled("Hoon Wide")
-                            .boxed();
-
-    hoon_wide.define(hoon_wide_body);
-
-    let hoon_body =
-            hoon_tall_parser(hoon.clone(),
-                        hoon_wide.clone(),
-                        spec.clone(),
-                        spec_wide.clone(),
-                        hoon.clone(),
-                        hoon_no_trace.clone(),
-                        hoon_wide.clone(),
-                        hoon_wide_no_trace.clone(),
-                        linemap.clone())
-                        .map_with(wrap_hoon_with_trace(wer.clone(), linemap.clone()))
-                        .labelled("Hoon")
-                        .boxed();
-
-    hoon.define(hoon_body);
-
-    let hoon_no_trace_body =
-            hoon_tall_parser(hoon_no_trace.clone(),
-                        hoon_wide_no_trace.clone(),
-                        spec_no_trace.clone(),
-                        spec_wide_no_trace.clone(),
-                        hoon.clone(),
-                        hoon_no_trace.clone(),
-                        hoon_wide.clone(),
-                        hoon_wide_no_trace.clone(),
-                        linemap.clone())
-                        .labelled("Hoon")
-                        .boxed();
-
-    hoon_no_trace.define(hoon_no_trace_body);
-
-    let hoon_wide_no_trace_body
-                    = hoon_wide_parser(
-                                        hoon_no_trace.clone(),
-                                        hoon_wide_no_trace.clone(),
-                                        spec_wide_no_trace.clone(),
-                                        hoon_wide.clone(),
-                                        hoon_wide_no_trace.clone(),
-                                        wer.clone(),
-                                        linemap.clone(),
-                                    )
-                                    .labelled("Hoon Wide")
-                                    .boxed();
-
-    hoon_wide_no_trace.define(hoon_wide_no_trace_body);
-
-    let spec_body_no_trace = spec_parser(hoon_no_trace.clone(),
-                                         hoon_wide_no_trace.clone(),
-                                         spec_no_trace.clone(),
-                                         spec_wide_no_trace.clone())
-                                        .labelled("Spec")
-                                        .boxed();
-
-    spec_no_trace.define(spec_body_no_trace);
-
-    let spec_wide_no_trace_body =
-            spec_wide_parser(spec_wide_no_trace.clone(),
-                             hoon_wide_no_trace.clone(),
-                            linemap)
-                            .labelled("Spec Wide")
-                             .boxed();
-
-    spec_wide_no_trace.define(spec_wide_no_trace_body);
-
-    let hoon      = if bug { hoon } else { hoon_no_trace };
-    let hoon_wide = if bug { hoon_wide } else { hoon_wide_no_trace };
-
-    (hoon, hoon_wide)
-
+        .map(|grafs|{
+            graf_to_tuna(grafs)
+        })
 }

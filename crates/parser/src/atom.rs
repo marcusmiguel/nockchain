@@ -571,6 +571,21 @@ pub fn cord_chars_to_atom(chars: Vec<char>) -> ParsedAtom {
 
 }
 
+// @t to @
+pub fn cord_bytes_to_atom(bytes: Vec<u8>) -> ParsedAtom {
+    let mut atom = BigUint::zero();
+    let mut power = BigUint::from(1u32);
+    let base = BigUint::from(256u32);
+
+    for &b in &bytes {
+        let byte = BigUint::from(b);
+        atom += &byte * &power;
+        power *= &base;
+    }
+
+    ParsedAtom::Big(atom)
+}
+
 const ALPH64: &str =
     "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-~";
 
