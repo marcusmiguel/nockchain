@@ -363,7 +363,7 @@ pub fn hoon_tall_parser<'src>(
     choice(parsers)
 }
 
-// Parse Imports + Hoon
+// Parse imports + Hoon
 //
 pub fn pile_parser<'src>(
     wer: Path,
@@ -381,13 +381,15 @@ pub fn pile_parser<'src>(
 
 }
 
-// Parse Hoon without Imports
+// Parse Hoon without imports.
 //
-//  note: Multiple hoons separated by gap will
-//        be auto-grouped in a list
+//  Note: Multiple hoons separated by gap will
+//        be automatically grouped into a list
 //        in order to match hoonc behaviour.
-//        This most used to allow multiple cores defined
-//        in a file without explicit concatanation.
+//
+//        This is mostly used to allow multiple cores
+//        to be defined in a file without explicit
+//        concatenation.
 //
 pub fn hoon_parser<'src>(
     wer: Path,
