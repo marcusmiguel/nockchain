@@ -6,9 +6,9 @@ use crate::utils::*;
 //
 //  Skin Formation Logic
 //
-//  The entry is +flay which is called to convert Hoon -> Skin
-//  flay is called by ^=, it depends on many other
-//  functions from the Hoon compiler
+//  The entry is +flay which is called to convert Hoon -> Skin.
+//  Flay is called by ^=.
+//  It depends on many other functions from the Hoon compiler.
 //
 
 pub fn flay(gen: Hoon) -> Option<Skin> {

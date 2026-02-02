@@ -505,8 +505,11 @@ pub fn float<'src>(
 //  String -> ParsedAtom conversion
 
 pub fn string_to_atom(s: String) -> ParsedAtom {
-    let vec_u128: Vec<u128> = s.chars().map(|c| c as u128).collect();
-
+    let bytes = s.into_bytes();
+    let vec_u128: Vec<u128> =
+                    bytes
+                    .into_iter()
+                    .map(|b| b as u128).collect();
     rap(3, &vec_u128)
 }
 

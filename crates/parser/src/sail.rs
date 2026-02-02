@@ -617,8 +617,8 @@ fn quote_innards<'src>(
     let escaped =
             just('\\').ignore_then(
             choice((one_of("--+*%;{{").map(|c| c as u128),
-                    just('\\').to(92 as u128),
-                    just('"').to(34 as u128),
+                    just('\\').to('\\' as u128),
+                    just('"').to('"' as u128),
                     // \HH hex escape
                     any().filter(|c: &char| c.is_ascii_hexdigit())
                         .then(any().filter(|c: &char| c.is_ascii_hexdigit()))
@@ -629,64 +629,84 @@ fn quote_innards<'src>(
                         })
                     )))
                     .map(|n| {
-                        Right(ParsedAtom::Small(n))
+                        vec![Right(ParsedAtom::Small(n))]
                     })
                     .boxed();
 
     //  chars from 32-256 (excluding DEL, {, \)
-    let tall_char  = any().filter(|c: &char| {
-        let x = *c as u32;
-        (0x20..=0x7E).contains(&x)
-            && x != 0x7B    // {
-            && x != 0x5C    // \
-        || (0x80..=0xFF).contains(&x)
-    });
+    let tall_char  =
+        any().filter(|c: &char| {
+            let mut buf = [0u8; 4];
+            let bytes = c.encode_utf8(&mut buf).as_bytes();
+
+            bytes.iter().all(|&b| b >= 32 && b != 127)
+                && !matches!(c, '{' | '\\')
+        })
+        .map(|c: char| {
+            let mut buf = [0u8; 4];
+            c.encode_utf8(&mut buf)
+                    .as_bytes()
+                    .iter()
+                    .map(|&b| Right(ParsedAtom::Small(b as u128)))
+                    .collect::<Vec<_>>()
+        });
 
     //  chars from 32-256 (excluding DEL, {, \, ")
     let wide_char = any().filter(|c: &char| {
-        let x = *c as u32;
-        (0x20..=0x7E).contains(&x)
-            && x != 0x7B    // {
-            && x != 0x5C    // \
-            && x != 0x22    // "
-        || (0x80..=0xFF).contains(&x)
-    });
+            let mut buf = [0u8; 4];
+            let bytes = c.encode_utf8(&mut buf).as_bytes();
+
+            bytes.iter().all(|&b| b >= 32 && b != 127)
+                && !matches!(c, '{' | '\\' | '\"')
+        })
+        .map(|c: char| {
+            let mut buf = [0u8; 4];
+            c.encode_utf8(&mut buf)
+                    .as_bytes()
+                    .iter()
+                    .map(|&b| Right(ParsedAtom::Small(b as u128)))
+                    .collect::<Vec<_>>()
+        });
 
     let char =
         if tall {
-            tall_char
-            .map(|c| Right(ParsedAtom::Small(c as u128)))
-            .boxed()
+            tall_char.boxed()
         } else {
-            wide_char
-            .map(|c| Right(ParsedAtom::Small(c as u128)))
-            .boxed()
+            wide_char.boxed()
         };
 
     let embed = inline_embed(hoon_wide.clone(), sail_wide.clone(), linemap)
                 .map(|tuna| {
-                    Left(tuna)
+                    vec![Left(tuna)]
                 }).labelled("Embed");
 
     if allow_linebreak {
         let linebreak = just("\n\"\"\"").not()
                         .ignore_then(newline()
-                                     .to(Right(ParsedAtom::Small(10 as u128))));
+                                     .to(vec![Right(ParsedAtom::Small(10 as u128))]));
 
         choice((escaped,
                 embed,
                 char,
                 linebreak))
         .repeated()
-        .collect::<Vec<Either<Tuna, ParsedAtom>>>()
+        .collect::<Vec<Vec<Either<Tuna, ParsedAtom>>>>()
+        .map(|v| v
+                .into_iter()
+                .flatten()
+                .collect::<Vec<Either<Tuna, ParsedAtom>>>())
         .labelled("Escaped or Char or Embed or Linebreak")
         .boxed()
     } else {
         choice((escaped,
-        embed,
-        char))
+                embed,
+                char))
         .repeated()
-        .collect::<Vec<Either<Tuna, ParsedAtom>>>()
+        .collect::<Vec<Vec<Either<Tuna, ParsedAtom>>>>()
+        .map(|v| v
+                  .into_iter()
+                  .flatten()
+                  .collect::<Vec<Either<Tuna, ParsedAtom>>>())
         .labelled("Escaped or Char or Embed")
         .boxed()
     }

@@ -39,9 +39,11 @@ where
 pub fn non_control_char<'src>(
 ) -> impl Parser<'src, &'src str, char, Err<'src>> {
     any().filter(|c: &char| {
-        let code = *c as u32;
-        (code >= 0x20 && code < 0x7F) || code >= 0x80
-    }).labelled("Non-Control Character")
+        let mut buf = [0u8; 4];
+        let bytes = c.encode_utf8(&mut buf).as_bytes();
+
+        bytes.iter().all(|&b| b >= 32 && b != 127)
+    })
 }
 
 fn gah<'src>() -> impl Parser<'src, &'src str, (), Err<'src>> {
@@ -583,14 +585,23 @@ pub fn soil<'src>(
 ) -> impl Parser<'src, &'src str, Vec<Woof>, Err<'src>>
 {
     let sump = sump(hoon_wide.clone())
-                .map(|h| Woof::Hoon(h)).boxed();
+                .map(|h| vec![Woof::Hoon(h)]).boxed();
 
-    // TODO: we need to support all UTF-8
-    // non-control 32-256, excluding DEL, {,  ", \
+    // non-control, excluding DEL, {,  ", \
     let wide_char = any().filter(|c: &char| {
-        let x = *c as u32;
-        (x >= 0x20 && x <= 0x7E && *c != '{' && *c != '"' && *c != '\\')
-            || (x >= 0x80 && x <= 0xFF)
+        let mut buf = [0u8; 4];
+        let bytes = c.encode_utf8(&mut buf).as_bytes();
+
+        bytes.iter().all(|&b| b >= 32 && b != 127)
+            && !matches!(c, '{' | '\"' | '\\')
+    })
+    .map(|c: char| {
+        let mut buf = [0u8; 4];
+        c.encode_utf8(&mut buf)
+                .as_bytes()
+                .iter()
+                .map(|&b| Woof::ParsedAtom(ParsedAtom::Small(b as u128)))
+                .collect::<Vec<Woof>>()
     });
 
     //
@@ -604,38 +615,46 @@ pub fn soil<'src>(
             just("\\")
                 .ignore_then(
                     choice((
-                            just("\\").to('\\'),
-                            just("\"").to('\"'),
-                            just("{").to('{'),
+                            just("\\").to(vec![Woof::ParsedAtom(ParsedAtom::Small('\\' as u128))]),
+                            just("\"").to(vec![Woof::ParsedAtom(ParsedAtom::Small('\"' as u128))]),
+                            just("{").to(vec![Woof::ParsedAtom(ParsedAtom::Small('{' as u128))]),
                             // \HH hex escape
                             any().filter(|c: &char| c.is_ascii_hexdigit())
                                 .then(any().filter(|c: &char| c.is_ascii_hexdigit()))
                                 .map(|(a, b)| {
                                     let hx = format!("{}{}", a, b);
                                     let byte = u8::from_str_radix(&hx, 16).unwrap();
-                                    byte as char
+                                    vec![Woof::ParsedAtom(ParsedAtom::Small(byte as u128))]
                                 }),
                             ))
-                )
-                .map(|c: char| Woof::ParsedAtom(ParsedAtom::Small(c as u128))),
+                ),
             //
             //  {hoon}
             //
             sump.clone(),
             ///
-            wide_char
-                .map(|c| Woof::ParsedAtom(ParsedAtom::Small(c as u128))),
+            wide_char,
         )).repeated()
-        .collect::<Vec<Woof>>()
+        .collect::<Vec<Vec<Woof>>>()
+        .map(|v| v.into_iter().flatten().collect::<Vec<Woof>>())
         .delimited_by(just("\""), just("\""))
         .labelled("Tape");
 
-    // TODO: we need to support all UTF-8
-    // non-control 32-256, excluding DEL, {,  \
+    // non-control, excluding DEL, {,  ", \
     let tall_char = any().filter(|c: &char| {
-        let x = *c as u32;
-        (x >= 0x20 && x <= 0x7E && *c != '{' && *c != '\\')
-            || (x >= 0x80 && x <= 0xFF)
+        let mut buf = [0u8; 4];
+        let bytes = c.encode_utf8(&mut buf).as_bytes();
+
+        bytes.iter().all(|&b| b >= 32 && b != 127)
+            && !matches!(c, '{' | '\"' | '\\')
+    })
+    .map(|c: char| {
+        let mut buf = [0u8; 4];
+        c.encode_utf8(&mut buf)
+                .as_bytes()
+                .iter()
+                .map(|&b| Woof::ParsedAtom(ParsedAtom::Small(b as u128)))
+                .collect::<Vec<Woof>>()
     });
 
     let tall_tape_line_content =
@@ -645,29 +664,28 @@ pub fn soil<'src>(
                 //
                 just("\\")
                 .ignore_then(
-                    choice((just("\\").to('\\'),
-                            just("{").to('{'),
+                    choice((just("\\").to(vec![Woof::ParsedAtom(ParsedAtom::Small('\\' as u128))]),
+                            just("{").to(vec![Woof::ParsedAtom(ParsedAtom::Small('{' as u128))]),
                             // \HH hex escape
                             any().filter(|c: &char| c.is_ascii_hexdigit())
                                 .then(any().filter(|c: &char| c.is_ascii_hexdigit()))
                                 .map(|(a, b)| {
                                     let hx = format!("{}{}", a, b);
                                     let byte = u8::from_str_radix(&hx, 16).unwrap();
-                                    byte as char
+                                    vec![Woof::ParsedAtom(ParsedAtom::Small(byte as u128))]
                                 })
-                            ))
-                )
-                .map(|c: char| Woof::ParsedAtom(ParsedAtom::Small(c as u128))),
+                ))),
             //
-                tall_char
-                .map(|c| Woof::ParsedAtom(ParsedAtom::Small(c as u128))),
+                tall_char,
             //
             //  {hoon}
             //
                 sump,
             ))
             .repeated()
-            .collect::<Vec<Woof>>();
+            .collect::<Vec<Vec<Woof>>>()
+            .map(|v| v.into_iter().flatten().collect::<Vec<Woof>>());
+
 
     let prefix_spaces =
         just(' ').repeated();
@@ -925,7 +943,7 @@ pub fn cord<'src>(
         );
 
     //  chars (excluding controls, DEL, ', \)
-    let cord_char_wide = any().filter(|c: &char| {
+    let wide_char = any().filter(|c: &char| {
         let mut buf = [0u8; 4];
         let bytes = c.encode_utf8(&mut buf).as_bytes();
 
@@ -939,7 +957,7 @@ pub fn cord<'src>(
     });
 
     //  chars (excluding controls, DEL)
-    let cord_char_tall = any().filter(|c: &char| {
+    let tall_char = any().filter(|c: &char| {
         let mut buf = [0u8; 4];
         let bytes = c.encode_utf8(&mut buf).as_bytes();
 
@@ -958,7 +976,7 @@ pub fn cord<'src>(
             .labelled("Cord Multiline Separator");
 
     let char_in_singled_quoted = choice((escape,
-                                         cord_char_wide,
+                                         wide_char,
                                         )).labelled("Cord Character");
 
     let single_quoted =  char_in_singled_quoted.then_ignore(gon.or_not())
@@ -988,7 +1006,7 @@ pub fn cord<'src>(
             .then_ignore(just("'''")).boxed();
 
     let triple_quoted_content =
-                    cord_char_tall
+                    tall_char
                     .repeated()
                     .collect::<Vec<Vec<u8>>>()
                     .map(|v| v.into_iter().flatten().collect::<Vec<u8>>())

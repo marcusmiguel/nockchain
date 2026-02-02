@@ -381,7 +381,7 @@ pub fn pile_parser<'src>(
 
 }
 
-// Parse Hoon without imports.
+//  Parse Hoon without imports.
 //
 //  Note: Multiple hoons separated by gap will
 //        be automatically grouped into a list
