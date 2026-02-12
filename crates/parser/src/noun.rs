@@ -2,7 +2,7 @@ use nockvm_macros::tas;
 use parser::ast::hoon::*;
 use std::collections::HashMap;
 use num_bigint::BigUint;
-use nockvm::noun::{D, T, Noun, YES, NO, DirectAtom};
+use nockvm::noun::{D, T, Noun, YES, NO, DirectAtom, NounAllocator};
 use nockapp::noun::slab::{slab_mug, NounSlab, slab_noun_equality};
 use crate::atom::*;
 use std::cmp;
@@ -137,7 +137,7 @@ pub fn hoon_to_noun(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
             T(slab, &[D(tas!(b"brcl")), p, q])
         }
         BarCen(prefix, tomes) => {
-            let prefix_noun = prefix.as_ref().map_or_else(|| D(0u64), |s| term_to_noun(slab, s));
+            let prefix_noun = opt_to_noun_with_slab(slab, &prefix, |slab, x| term_to_noun(slab, x));
             let mut tomes_pairs = Vec::new();
             for (k, tome) in tomes {
                 let k_noun = term_to_noun(slab, k);
@@ -182,7 +182,7 @@ pub fn hoon_to_noun(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
             T(slab, &[D(tas!(b"brts")), spec_noun, p_noun])
         }
         BarPat(prefix, tomes) => {
-            let prefix_noun = prefix.as_ref().map_or_else(|| D(0u64), |s| term_to_noun(slab, s));
+            let prefix_noun = opt_to_noun_with_slab(slab, &prefix, |slab, x| term_to_noun(slab, x));
             let mut tomes_pairs = Vec::new();
             for (k, tome) in tomes {
                 let k_noun = term_to_noun(slab, k);
@@ -543,10 +543,7 @@ pub fn hoon_to_noun(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
         }
         TisTar((name, spec_opt), a, b) => {
             let name_noun = term_to_noun(slab, name);
-            let spec_noun = spec_opt.as_ref().map_or_else(
-                || D(0u64),
-                |s| spec_to_noun(slab, s),
-            );
+            let spec_noun = opt_to_noun_with_slab(slab, &spec_opt, |slab, x| spec_to_noun(slab, x));
             let name_spec = T(slab, &[name_noun, spec_noun]);
             let a = hoon_to_noun(slab, a);
             let b = hoon_to_noun(slab, b);
@@ -686,7 +683,7 @@ pub fn hoon_to_noun(slab: &mut NounSlab, hoon: &Hoon) -> Noun {
     }
 }
 
-fn list_to_noun(slab: &mut NounSlab, nouns: Vec<Noun>) -> Noun {
+fn list_to_noun(slab: &mut impl NounAllocator, nouns: Vec<Noun>) -> Noun {
     nouns.into_iter()
         .rev()
         .fold(D(0u64), |tail, head| T(slab, &[head, tail]))
@@ -790,12 +787,12 @@ fn term_to_noun(slab: &mut NounSlab, s: &str) -> Noun {
     atom_to_noun(slab, &atom)
 }
 
-fn cord_to_noun(slab: &mut NounSlab, s: &str) -> Noun {
+fn cord_to_noun(alloc: &mut impl NounAllocator, s: &str) -> Noun {
     let atom = string_to_atom(s.to_string());
-    atom_to_noun(slab, &atom)
+    atom_to_noun(alloc, &atom)
 }
 
-fn atom_to_noun(slab: &mut NounSlab, atom: &ParsedAtom) -> Noun {
+fn atom_to_noun(alloc: &mut impl NounAllocator, atom: &ParsedAtom) -> Noun {
     match atom {
         ParsedAtom::Small(n) => {
             if *n <= DIRECT_MAX as u128 {
@@ -806,16 +803,15 @@ fn atom_to_noun(slab: &mut NounSlab, atom: &ParsedAtom) -> Noun {
                 let trimmed = &bytes[..bytes.len() - trimmed_len];
                 let bytes_slice = if trimmed.is_empty() { &[0u8] } else { trimmed };
                 let bytes = Bytes::copy_from_slice(bytes_slice);
-                Atom::from_bytes(slab, &bytes).as_noun()
+                Atom::from_bytes(alloc, &bytes).as_noun()
             }
         }
         ParsedAtom::Big(b) => {
             let ubig: UBig = UBig::from_le_bytes(b.to_bytes_le().as_slice());
-            Atom::from_ubig(slab, &ubig).as_noun()
+            Atom::from_ubig(alloc, &ubig).as_noun()
         }
     }
 }
-
 
 fn opt_to_noun<T, F>(slab: &mut NounSlab, opt: &Option<T>, f: F) -> Noun
 where
@@ -1005,9 +1001,9 @@ fn block_to_noun(slab: &mut NounSlab, block: &Block) -> Noun {
     list_to_noun(slab, paths)
 }
 
-fn path_to_noun(slab: &mut NounSlab, path: &Path) -> Noun {
-    let knots: Vec<_> = path.iter().map(|k| cord_to_noun(slab, k)).collect();
-    list_to_noun(slab, knots)
+pub fn path_to_noun(alloc: &mut impl NounAllocator, path: &Path) -> Noun {
+    let knots: Vec<_> = path.iter().map(|k| cord_to_noun(alloc, k)).collect();
+    list_to_noun(alloc, knots)
 }
 
 fn gate_to_noun(slab: &mut NounSlab, (spec, body): &Gate) -> Noun {
@@ -1331,10 +1327,10 @@ fn alas_to_noun(slab: &mut NounSlab, alas: &Alas) -> Noun {
         .map(|(k, v)| {
             let k_noun = term_to_noun(slab, k);
             let v_noun = hoon_to_noun(slab, v);
-            (k_noun, v_noun)
+             T(slab, &[k_noun, v_noun])
         })
         .collect();
-    map_to_noun(slab, pairs)
+    list_to_noun(slab, pairs)
 }
 
 fn tyre_to_noun(slab: &mut NounSlab, tyre: &Tyre) -> Noun {
@@ -1721,7 +1717,6 @@ pub fn pile_to_noun(slab: &mut NounSlab, pile: &Pile) -> Noun {
 
     T(slab, &[sur_noun, lib_noun, raw_noun, bar_noun, hax_noun, hoon_noun])
 }
-
 
 //
 //  Cue / Jam

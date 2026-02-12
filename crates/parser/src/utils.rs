@@ -1,11 +1,21 @@
 use crate::ast::hoon::*;
-use nockvm::noun::{D, Noun};
+use nockvm::noun::{T, D, Noun, NounAllocator};
 use nockvm_macros::tas;
+use nockvm::interpreter::{interpret, Context, NockCancelToken, Slogger};
+use nockvm::jets::hot::{Hot, URBIT_HOT_STATE};
+use nockvm::jets::cold::Cold;
+use nockvm::hamt::Hamt;
+use nockvm::jets::warm::Warm;
+use crate::noun::{pile_to_noun, path_to_noun};
 use nockapp::noun::slab::{slab_mug, slab_noun_equality};
 use either::Either::{Left, Right};
-use std::cmp;
+use std::{cmp, fs};
 use std::sync::Arc;
+use std::sync::atomic::AtomicIsize;
+use std::time::{Instant, Duration};
 use std::path::PathBuf;
+use ariadne::*;
+use crate::parser_main::pile_parser;
 use std::collections::HashMap;
 use num_bigint::BigUint;
 use std::ops::BitAnd;
@@ -20,6 +30,8 @@ use chumsky::{
 };
 use crate::atom::*;
 use crate::skin_formation::*;
+use bytes::Bytes;
+use nockvm::mem::NockStack;
 
 pub type Err<'src> = extra::Full<Rich<'src, char>, (), ()>;
 
@@ -268,7 +280,7 @@ pub fn variable_name_and_type<'src>(
                     .ignore_then(
                         spec_wide.clone()
                     ).or_not())
-        .map(|(term, maybe_spec)|
+        .map(|(term, maybe_spec)| {
             match maybe_spec {
                 None => Skin::Term(term),
                 Some(spec) => Skin::Name(
@@ -278,7 +290,7 @@ pub fn variable_name_and_type<'src>(
                         Box::new(Skin::Base(BaseType::NounExpr)),
                     )),
                 ),
-        });
+        }});
 
     let just_type = spec_wide.clone() // =/  type
         .map(|s| Skin::Spec(Box::new(s), Box::new(Skin::Base(BaseType::NounExpr))));
@@ -2139,38 +2151,6 @@ pub fn diff_and_report(a: &Noun, b: &Noun) {
     }
 }
 
-// fn atom_to_tas_string(atom: &DirectAtom) -> String {
-//     let val: u128 = atom.data() as u128;
-//     if val == 0 { return String::new(); }
-
-//     let bytes = val.to_le_bytes();
-//     let mut null_seen = false;
-//     let mut valid = true;
-//     let mut len = 0;
-
-//     for &b in &bytes {
-//         if b == 0 {
-//             null_seen = true;
-//         } else if null_seen {
-//             valid = false;
-//             break;
-//         } else if !b.is_ascii_lowercase() && b != b'-' {
-//             valid = false;
-//             break;
-//         } else {
-//             len += 1;
-//         }
-
-//         if len > 126 { valid = false; break; }
-//     }
-
-//     if valid && len > 0 {
-//         format!("%{}", unsafe { std::str::from_utf8_unchecked(&bytes[..len]) })
-//     } else {
-//         String::new()
-//     }
-// }
-
 pub fn collect_inputs(path: &PathBuf) -> Vec<PathBuf> {
     let mut files = Vec::new();
     collect_inputs_inner(path, &mut files);
@@ -2203,3 +2183,239 @@ fn collect_inputs_inner(path: &PathBuf, out: &mut Vec<PathBuf>) {
     }
 }
 
+//  Text to Noun
+pub fn string_to_tape(alloc: &mut impl NounAllocator, s: &str) -> Noun {
+    let mut atoms: Vec<Noun> = s.bytes()
+        .map(|b| D(b as u64))
+        .collect();
+    atoms.push(D(0));
+
+    T(alloc, &atoms)
+}
+
+pub static HOONCJAM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../hoonc/bootstrap/hoonc.jam"
+));
+
+fn get_hoon_kernel(context: &mut Context) -> Noun {
+    use nockapp::NounExt;
+
+    let hooncjam = Bytes::from(HOONCJAM);
+
+    let hoonc_trap = Noun::cue_bytes_slice(&mut context.stack, &hooncjam)
+                      .expect("get_hoon_kernel: invalid kernel jam");
+
+    let kick_trap = T(&mut context.stack, &[D(9), D(2), D(0), D(1)]);
+
+    let wrapped_hoonc_core = interpret(context, hoonc_trap, kick_trap)
+        .unwrap_or_else(|err| {
+        panic!(
+            "get_hoon_kernel: failled to kick trap {err:?} at {}:{} (git sha: {:?})",
+            file!(),
+            line!(),
+            option_env!("GIT_SHA")
+        )
+    });
+
+    let get_inner_core = T(&mut context.stack, &[D(0), D(126)]);
+
+    let hoonc_core = interpret(context, wrapped_hoonc_core, get_inner_core)
+        .unwrap_or_else(|err| {
+        panic!(
+            "get_hoon_kernel: failled to access inner kernel {err:?} at {}:{} (git sha: {:?})",
+            file!(),
+            line!(),
+            option_env!("GIT_SHA")
+        )
+    });
+
+    hoonc_core
+}
+
+struct TestSlogger {}
+
+impl Slogger for TestSlogger {
+    fn slog(&mut self, _stack: &mut NockStack, _pri: u64, _noun: Noun) {
+        eprintln!("Test slogged.");
+    }
+
+    fn flog(&mut self, _stack: &mut NockStack, _cord: Noun) {
+        eprintln!("Test flogged.");
+    }
+}
+
+pub fn init_context() -> Context {
+    let mut stack = NockStack::new(800 << 10 << 10, 0);
+    let cold = Cold::new(&mut stack);
+    let warm = Warm::new(&mut stack);
+    let hot = Hot::init(&mut stack, URBIT_HOT_STATE);
+    let cache = Hamt::<Noun>::new(&mut stack);
+    let slogger = std::boxed::Box::pin(TestSlogger {});
+    let cancel = Arc::new(AtomicIsize::new(NockCancelToken::RUNNING_IDLE));
+    let test_jets = Hamt::<()>::new(&mut stack);
+
+    Context {
+        stack,
+        slogger,
+        cold,
+        warm,
+        hot,
+        cache,
+        scry_stack: D(0),
+        trace_info: None,
+        running_status: cancel,
+        test_jets,
+    }
+}
+
+//  constructs formula for calling
+//  +parse-pile (from hoonc):
+//
+pub fn call_parse_pile(
+    stack: &mut NockStack,
+    path_sample: Noun,
+    tape_sample: Noun,
+) -> Noun {
+    // [0 3]
+    let axis_3 = T(stack, &[
+        D(0),
+        D(3),
+    ]);
+
+    // [9 95 0 31]
+    let gate = T(stack, &[
+        D(9),
+        D(95),
+        D(0),
+        D(31),
+    ]);
+
+    // [7 [0 3] 1 path_sample]
+    let path_arm = T(stack, &[
+        D(7),
+        axis_3,
+        D(1),
+        path_sample,
+    ]);
+
+    // [7 [0 3] 1 tape_sample]
+    let tape_arm = T(stack, &[
+        D(7),
+        axis_3,
+        D(1),
+        tape_sample,
+    ]);
+
+    // [6 path_arm tape_arm]
+    let cond = T(stack, &[
+        D(6),
+        path_arm,
+        tape_arm,
+    ]);
+
+    // [8 gate 9 2 10 cond 0 2]
+    T(stack, &[
+        D(8),
+        gate,
+        D(9),
+        D(2),
+        D(10),
+        cond,
+        D(0),
+        D(2),
+    ])
+}
+
+pub fn parse_text(
+    context: &mut Context,
+    hoonc_core: Noun,
+    path: &std::path::Path,
+    source: &str,
+) -> Noun {
+
+    let path_vec =
+            path
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<String>>();
+
+    let path = path_to_noun(&mut context.stack, &path_vec);
+    let tape = string_to_tape(&mut context.stack, source);
+
+    let call_parse_pile = call_parse_pile(&mut context.stack, path, tape);
+
+    let pile = interpret(context, hoonc_core, call_parse_pile)
+        .unwrap_or_else(|err| {
+        panic!(
+            "Panicked with {err:?} at {}:{} (git sha: {:?})",
+            file!(),
+            line!(),
+            option_env!("GIT_SHA")
+        )
+    });
+
+    pile
+}
+
+pub fn parse_file_and_diff(
+    source_path: &std::path::Path,
+) -> Result<(Noun, Duration, Duration), Box<dyn std::error::Error>> {
+
+    let source = fs::read_to_string(source_path)
+        .map_err(|e| format!("Failed to read file '{}': {}", source_path.display(), e))?;
+
+    let mut slab = NounSlab::new();
+    let mut context = init_context();
+    let hoonc_core = get_hoon_kernel(&mut context);
+
+    let native_start = Instant::now();
+
+    let wer: Vec<String> = source_path
+        .iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+
+    let linemap = Arc::new(LineMap::new(&source));
+
+    let actual_pile = pile_parser(
+        wer,
+        true,
+        linemap
+    )
+    .parse(&source)
+    .into_result()
+    .map_err(|errs| {
+        let file_id = source_path.to_string_lossy().into_owned();
+        for err in errs {
+            let span = err.span().into_range();
+            Report::build(ReportKind::Error, (file_id.clone(), span.clone()))
+                .with_config(Config::new().with_index_type(IndexType::Byte))
+                .with_label(
+                    Label::new((file_id.clone(), span))
+                        .with_message(err.reason().to_string())
+                        .with_color(Color::Red),
+                )
+                .finish()
+                .eprint((file_id.clone(), Source::from(source.clone())))
+                .unwrap();
+        }
+        "Native parser failed".to_string()
+    })?;
+    let native_duration = native_start.elapsed();
+
+    let expected_start = Instant::now();
+
+    let expected_pile = parse_text(&mut context, hoonc_core, &source_path, &source);
+    let expected_duration = expected_start.elapsed();
+
+    let mut actual_noun = pile_to_noun(&mut slab, &actual_pile);
+    let mut expected_noun = unsafe { slab.copy_into(expected_pile) };
+
+    unsafe {
+        diff_noun(&mut expected_noun, &mut actual_noun, &mut false)
+            .map_err(|e| format!("Diff mismatch in file '{}': {:?}", source_path.display(), e))?;
+    }
+
+    Ok((expected_noun, native_duration, expected_duration))
+}

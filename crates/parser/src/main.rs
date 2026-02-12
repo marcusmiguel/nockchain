@@ -365,6 +365,14 @@ pub fn hoon_tall_parser<'src>(
 
 // Parse imports + Hoon
 //
+//  Note: Multiple hoons separated by gap will
+//        be automatically grouped into a list
+//        in order to match hoonc behaviour.
+//
+//        This is mostly used to allow multiple cores
+//        to be defined in a file without explicit
+//        concatenation.
+//
 pub fn pile_parser<'src>(
     wer: Path,
     bug: bool,
@@ -372,7 +380,15 @@ pub fn pile_parser<'src>(
 ) -> impl Parser<'src, &'src str, Pile, Err<'src>> {
 
     parse_imports()
-    .then(hoon_parser(wer, bug, linemap))
+    .then(hoon_parser(wer, bug, linemap)
+        .separated_by(gap())
+        .at_least(1)
+        .collect::<Vec<Hoon>>()
+        .map(|hoons| Hoon::TisSig(hoons)))
+    .delimited_by(gap().or_not(),
+                  gap()
+                  .or_not()
+                  .ignore_then(version_pin().or_not()))
     .map(|(mut pile, body)| {
         pile.hoon = body;
         pile
@@ -382,14 +398,6 @@ pub fn pile_parser<'src>(
 }
 
 //  Parse Hoon without imports.
-//
-//  Note: Multiple hoons separated by gap will
-//        be automatically grouped into a list
-//        in order to match hoonc behaviour.
-//
-//        This is mostly used to allow multiple cores
-//        to be defined in a file without explicit
-//        concatenation.
 //
 pub fn hoon_parser<'src>(
     wer: Path,
@@ -509,15 +517,6 @@ pub fn hoon_parser<'src>(
     let hoon = if bug { hoon } else { hoon_no_trace };
 
     hoon
-    .separated_by(gap())
-    .at_least(1)
-    .collect::<Vec<Hoon>>()
-    .map(|hoons| Hoon::TisSig(hoons))
-    .delimited_by(gap().or_not(),
-                  gap()
-                  .or_not()
-                  .ignore_then(version_pin().or_not()))
-                  .boxed()
 }
 
 #[derive(ClapParser, Debug)]

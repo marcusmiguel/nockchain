@@ -21,8 +21,7 @@ fn test_ud_zero() {
         .unwrap();
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ud")), D(0)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ud")), D(0)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -68,8 +67,7 @@ fn test_decimal_with_dots() {
         .unwrap();
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ud")), D(31415926535897)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ud")), D(31415926535897)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -92,8 +90,7 @@ fn test_long_float() {
     let ubig = UBig::from_str_radix(num_str, 10).unwrap();
     let big_atom = Atom::from_ubig(&mut slab, &ubig).as_noun();
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"rq")), big_atom]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"rq")), big_atom]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -111,8 +108,7 @@ fn test_rh_float() {
         .unwrap();
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"rh")), D(16968)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"rh")), D(16968)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -130,8 +126,7 @@ fn test_rs_float() {
         .unwrap();
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"rs")), D(1078530011)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"rs")), D(1078530011)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -149,8 +144,7 @@ fn test_rd_float() {
         .unwrap();
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"rd")), D(4614256656552045848)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"rd")), D(4614256656552045848)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -173,8 +167,7 @@ fn test_rq_float() {
     let ubig = UBig::from_str_radix(num_str, 10).unwrap();
     let big_atom = Atom::from_ubig(&mut slab, &ubig).as_noun();
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"rq")), big_atom]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"rq")), big_atom]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -193,8 +186,7 @@ fn test_utf32() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"c")), D(286701)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"c")), D(286701)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -217,8 +209,7 @@ fn test_absolute_date() {
     let ubig = UBig::from_str_radix(num_str, 10).unwrap();
     let big_atom = Atom::from_ubig(&mut slab, &ubig).as_noun();
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"da")), big_atom]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"da")), big_atom]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -241,8 +232,7 @@ fn test_relative_date() {
     let ubig = UBig::from_str_radix(num_str, 10).unwrap();
     let big_atom = Atom::from_ubig(&mut slab, &ubig).as_noun();
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"dr")), big_atom]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"dr")), big_atom]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -261,8 +251,7 @@ fn test_binary_number() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ub")), D(56)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ub")), D(56)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -295,8 +284,7 @@ fn test_hexadecimal_number() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ux")), D(8675309)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ux")), D(8675309)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -315,8 +303,7 @@ fn test_hexadecimal_with_gap_number() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ux")), D(8675309)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ux")), D(8675309)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -335,8 +322,7 @@ fn test_base64_number() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"uw")), D(9315042280129358)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"uw")), D(9315042280129358)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -355,8 +341,7 @@ fn test_base32_number() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"uv")), D(8675309)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"uv")), D(8675309)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -375,8 +360,7 @@ fn test_ui_number() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ui")), D(123456789)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ui")), D(123456789)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -399,8 +383,7 @@ fn test_btc_address() {
     let ubig = UBig::from_str_radix(num_str, 10).unwrap();
     let big_atom = Atom::from_ubig(&mut slab, &ubig).as_noun();
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"uc")), big_atom]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"uc")), big_atom]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -419,8 +402,7 @@ fn test_ipv6_address() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"is")), D(123543654234)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"is")), D(123543654234)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -439,8 +421,7 @@ fn test_ipv4_address() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"if")), D(3232235777)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"if")), D(3232235777)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -459,8 +440,7 @@ fn test_term() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"rock")), D(tas!(b"tas")), D(1801678702)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"rock")), D(tas!(b"tas")), D(1801678702)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -479,8 +459,7 @@ fn test_buc_term() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"rock")), D(tas!(b"tas")), D(0)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"rock")), D(tas!(b"tas")), D(0)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -513,8 +492,7 @@ fn test_knot() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ta")), D(1801678702)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ta")), D(1801678702)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -533,8 +511,7 @@ fn test_empty_knot() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ta")), D(0)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"ta")), D(0)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -553,8 +530,7 @@ fn test_cord() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"t")), D(1801678702)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"t")), D(1801678702)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -573,8 +549,7 @@ fn test_empty_cord() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"t")), D(0)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"t")), D(0)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -605,8 +580,7 @@ fn test_multiline_cord() {
     let ubig = UBig::from_str_radix(num_str, 10).unwrap();
     let big_atom = Atom::from_ubig(&mut slab, &ubig).as_noun();
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"t")), big_atom]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"t")), big_atom]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -625,8 +599,7 @@ fn test_double_signed_decimal_number() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"sd")), D(246200)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"sd")), D(246200)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))
@@ -645,8 +618,7 @@ fn test_signed_binary_number() {
 
     let mut actual_noun = hoon_to_noun(&mut slab, &res);
 
-    let atom = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"sb")), D(111)]);
-    let mut expected_noun = T(&mut slab, &[D(tas!(b"tssg")), atom, D(0)]);
+    let mut expected_noun = T(&mut slab, &[D(tas!(b"sand")), D(tas!(b"sb")), D(111)]);
 
     unsafe {
         assert!(slab_noun_equality(&mut actual_noun, &mut expected_noun))

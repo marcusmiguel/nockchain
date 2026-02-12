@@ -9,6 +9,11 @@ The binary will be available at:
 
 **../../target/release/parse**
 
+## Run tests
+```
+cargo test --release -- --nocapture
+```
+
 ## Usage
 
 ## Parse a Hoon file to Json:
@@ -23,8 +28,11 @@ The binary will be available at:
 ```bash
 ../../target/release/parser file_to_parse.hoon
 ```
-## Disable debug traces
+## Disable Debug traces
 ```
 ../../target/release/parser --no-dbug file_to_parse.hoon
 ```
+## Parse Hoon without imports
+```
+../../target/release/parser --no-imports file_to_parse.hoon
 ```

@@ -79,16 +79,21 @@ pub fn flay(gen: Hoon) -> Option<Skin> {
             Some(Skin::Spec(s.clone(), Box::new(Skin::Base(BaseType::NounExpr))))
         }
 
-        Hoon::KetTis(skin, h) => {
+    Hoon::KetTis(spec, h) => {
             let maybe_skin = flay(*h);
             match maybe_skin {
                 Some(s) => {
-                    match skin {
-                        Skin::Term(ref t) => Some(Skin::Name(t.to_string(), Box::new(skin.clone()))),
-                        Skin::Name(ref t, ref b)
-                            if matches!(**b, Skin::Base(BaseType::NounExpr)) => {
-                            Some(Skin::Name(t.clone(), Box::new(s)))
-                        },
+                    match spec {
+                        Skin::Term(ref t) => {
+                            Some(Skin::Name(t.to_string(), Box::new(s)))
+                        }
+                        Skin::Name(ref t, ref b) => {
+                            if matches!(**b, Skin::Base(BaseType::NounExpr)) {
+                                Some(Skin::Name(t.clone(), Box::new(s)))
+                            } else {
+                                None
+                            }
+                        }
                         _ => None,
                     }
                 }
